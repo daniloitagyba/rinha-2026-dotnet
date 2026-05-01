@@ -1,0 +1,5 @@
+bin/
+obj/
+data/*.idx
+results/*.json
+test/results.json

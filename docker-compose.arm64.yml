@@ -1,0 +1,11 @@
+services:
+  lb:
+    platform: linux/arm64
+
+  api1:
+    image: rinha-2026-dotnet:local-arm64
+    platform: linux/arm64
+
+  api2:
+    image: rinha-2026-dotnet:local-arm64
+    platform: linux/arm64

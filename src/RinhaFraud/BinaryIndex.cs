@@ -1,0 +1,348 @@
+namespace RinhaFraud;
+
+using System;
+using System.Buffers.Binary;
+using System.IO;
+using System.IO.MemoryMappedFiles;
+using System.Runtime.CompilerServices;
+
+internal unsafe sealed class BinaryIndex : IDisposable
+{
+    private static ReadOnlySpan<byte> Magic => "RINHA26I"u8;
+    private const int HeaderLength = 80;
+
+    private readonly MemoryMappedFile _mappedFile;
+    private readonly MemoryMappedViewAccessor _accessor;
+    private byte* _ptr;
+    private readonly long _length;
+    private readonly int _count;
+    private readonly long _vectorsOffset;
+    private readonly long _labelsOffset;
+    private readonly long _bucketOffsetsOffset;
+    private readonly long _bucketItemsOffset;
+
+    private BinaryIndex(
+        MemoryMappedFile mappedFile,
+        MemoryMappedViewAccessor accessor,
+        byte* ptr,
+        long length,
+        int count,
+        long vectorsOffset,
+        long labelsOffset,
+        long bucketOffsetsOffset,
+        long bucketItemsOffset)
+    {
+        _mappedFile = mappedFile;
+        _accessor = accessor;
+        _ptr = ptr;
+        _length = length;
+        _count = count;
+        _vectorsOffset = vectorsOffset;
+        _labelsOffset = labelsOffset;
+        _bucketOffsetsOffset = bucketOffsetsOffset;
+        _bucketItemsOffset = bucketItemsOffset;
+    }
+
+    public static BinaryIndex Open(string path)
+    {
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException($"index not found: {path}", path);
+        }
+
+        var info = new FileInfo(path);
+        if (info.Length < HeaderLength)
+        {
+            throw new InvalidOperationException("index too small");
+        }
+
+        var mappedFile = MemoryMappedFile.CreateFromFile(path, FileMode.Open, null, 0, MemoryMappedFileAccess.Read);
+        var accessor = mappedFile.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read);
+        byte* ptr = null;
+        accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
+
+        try
+        {
+            var header = new ReadOnlySpan<byte>(ptr, HeaderLength);
+            if (!header[..8].SequenceEqual(Magic))
+            {
+                throw new InvalidOperationException("bad index magic");
+            }
+
+            var version = BinaryPrimitives.ReadUInt32LittleEndian(header[8..]);
+            var dim = BinaryPrimitives.ReadUInt32LittleEndian(header[12..]);
+            var count = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(header[16..]));
+            var scale = BinaryPrimitives.ReadUInt32LittleEndian(header[20..]);
+            var bucketCount = BinaryPrimitives.ReadUInt32LittleEndian(header[24..]);
+            var vectorsOffset = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[32..]));
+            var labelsOffset = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[40..]));
+            var bucketOffsetsOffset = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[48..]));
+            var bucketItemsOffset = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[56..]));
+            var fileLength = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[64..]));
+
+            if (version != 1 || dim != Constants.Dim || scale != Constants.Scale || bucketCount != Constants.BucketCount)
+            {
+                throw new InvalidOperationException("unsupported index version or shape");
+            }
+
+            if (fileLength != info.Length)
+            {
+                throw new InvalidOperationException("index file length mismatch");
+            }
+
+            var vectorsEnd = vectorsOffset + count * Constants.Dim * 2L;
+            var labelsEnd = labelsOffset + count;
+            var bucketOffsetsEnd = bucketOffsetsOffset + (Constants.BucketCount + 1L) * 4L;
+            var bucketItemsEnd = bucketItemsOffset + count * 4L;
+            if (vectorsEnd > fileLength || labelsEnd > fileLength || bucketOffsetsEnd > fileLength || bucketItemsEnd > fileLength)
+            {
+                throw new InvalidOperationException("index offsets out of bounds");
+            }
+
+            return new BinaryIndex(
+                mappedFile,
+                accessor,
+                ptr,
+                fileLength,
+                count,
+                vectorsOffset,
+                labelsOffset,
+                bucketOffsetsOffset,
+                bucketItemsOffset);
+        }
+        catch
+        {
+            accessor.SafeMemoryMappedViewHandle.ReleasePointer();
+            accessor.Dispose();
+            mappedFile.Dispose();
+            throw;
+        }
+    }
+
+    public int Prefault()
+    {
+        var checksum = 0;
+        for (long pos = 0; pos < _length; pos += 4096)
+        {
+            checksum ^= VolatileRead(_ptr + pos);
+        }
+
+        checksum ^= VolatileRead(_ptr + _length - 1);
+        return checksum;
+    }
+
+    public int ClassifyFraudCount(ReadOnlySpan<short> query, in SearchParams searchParams)
+    {
+        Span<long> topDist = stackalloc long[Constants.K];
+        Span<byte> topLabel = stackalloc byte[Constants.K];
+        topDist.Fill(long.MaxValue);
+
+        if (searchParams.Flat)
+        {
+            for (uint id = 0; id < _count; id++)
+            {
+                Consider(id, query, topDist, topLabel);
+            }
+        }
+        else
+        {
+            Span<ushort> keys = stackalloc ushort[Constants.BucketCount];
+            Span<byte> seen = stackalloc byte[Constants.BucketCount];
+            var keyCount = Vectorizer.NeighborKeys(query, keys, seen);
+            var candidates = 0;
+
+            for (var keyIndex = 0; keyIndex < keyCount; keyIndex++)
+            {
+                var key = keys[keyIndex];
+                var start = BucketOffset(key);
+                var end = BucketOffset(key + 1);
+                for (var itemPos = start; itemPos < end; itemPos++)
+                {
+                    var id = BucketItem(itemPos);
+                    Consider(id, query, topDist, topLabel);
+                    candidates++;
+                    if (candidates >= searchParams.MaxCandidates)
+                    {
+                        break;
+                    }
+                }
+
+                if (candidates >= searchParams.MaxCandidates || candidates >= searchParams.MinCandidates)
+                {
+                    break;
+                }
+            }
+
+            if (candidates < Constants.K)
+            {
+                for (uint id = 0; id < _count; id++)
+                {
+                    Consider(id, query, topDist, topLabel);
+                }
+            }
+        }
+
+        var frauds = 0;
+        for (var i = 0; i < Constants.K; i++)
+        {
+            if (topLabel[i] == 1)
+            {
+                frauds++;
+            }
+        }
+
+        return frauds;
+    }
+
+    private void Consider(uint id, ReadOnlySpan<short> query, Span<long> topDist, Span<byte> topLabel)
+    {
+        var dist = DistanceSquared(id, query, topDist[Constants.K - 1]);
+        if (dist >= topDist[4])
+        {
+            return;
+        }
+
+        var label = Label(id);
+        if (dist < topDist[0])
+        {
+            topDist[4] = topDist[3];
+            topDist[3] = topDist[2];
+            topDist[2] = topDist[1];
+            topDist[1] = topDist[0];
+            topDist[0] = dist;
+            topLabel[4] = topLabel[3];
+            topLabel[3] = topLabel[2];
+            topLabel[2] = topLabel[1];
+            topLabel[1] = topLabel[0];
+            topLabel[0] = label;
+        }
+        else if (dist < topDist[1])
+        {
+            topDist[4] = topDist[3];
+            topDist[3] = topDist[2];
+            topDist[2] = topDist[1];
+            topDist[1] = dist;
+            topLabel[4] = topLabel[3];
+            topLabel[3] = topLabel[2];
+            topLabel[2] = topLabel[1];
+            topLabel[1] = label;
+        }
+        else if (dist < topDist[2])
+        {
+            topDist[4] = topDist[3];
+            topDist[3] = topDist[2];
+            topDist[2] = dist;
+            topLabel[4] = topLabel[3];
+            topLabel[3] = topLabel[2];
+            topLabel[2] = label;
+        }
+        else if (dist < topDist[3])
+        {
+            topDist[4] = topDist[3];
+            topDist[3] = dist;
+            topLabel[4] = topLabel[3];
+            topLabel[3] = label;
+        }
+        else
+        {
+            topDist[4] = dist;
+            topLabel[4] = label;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private long DistanceSquared(uint id, ReadOnlySpan<short> query, long cutoff)
+    {
+        var vector = _ptr + _vectorsOffset + id * Constants.Dim * 2L;
+        long sum = 0;
+
+        var d = (long)query[6] - Unsafe.ReadUnaligned<short>(vector + 12);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[10] - Unsafe.ReadUnaligned<short>(vector + 20);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[9] - Unsafe.ReadUnaligned<short>(vector + 18);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[5] - Unsafe.ReadUnaligned<short>(vector + 10);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[11] - Unsafe.ReadUnaligned<short>(vector + 22);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[2] - Unsafe.ReadUnaligned<short>(vector + 4);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[4] - Unsafe.ReadUnaligned<short>(vector + 8);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[7] - Unsafe.ReadUnaligned<short>(vector + 14);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[0] - Unsafe.ReadUnaligned<short>(vector);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[1] - Unsafe.ReadUnaligned<short>(vector + 2);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[8] - Unsafe.ReadUnaligned<short>(vector + 16);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[12] - Unsafe.ReadUnaligned<short>(vector + 24);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[3] - Unsafe.ReadUnaligned<short>(vector + 6);
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)query[13] - Unsafe.ReadUnaligned<short>(vector + 26);
+        sum += d * d;
+
+        return sum;
+    }
+
+    private byte Label(uint id)
+    {
+        return *(_ptr + _labelsOffset + id);
+    }
+
+    private uint BucketOffset(int key)
+    {
+        return Unsafe.ReadUnaligned<uint>(_ptr + _bucketOffsetsOffset + key * 4L);
+    }
+
+    private uint BucketItem(uint pos)
+    {
+        return Unsafe.ReadUnaligned<uint>(_ptr + _bucketItemsOffset + pos * 4L);
+    }
+
+    private static byte VolatileRead(byte* ptr)
+    {
+        return System.Threading.Volatile.Read(ref *ptr);
+    }
+
+    public void Dispose()
+    {
+        if (_ptr != null)
+        {
+            _accessor.SafeMemoryMappedViewHandle.ReleasePointer();
+            _ptr = null;
+        }
+
+        _accessor.Dispose();
+        _mappedFile.Dispose();
+    }
+}

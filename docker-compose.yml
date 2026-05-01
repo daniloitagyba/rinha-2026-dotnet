@@ -1,0 +1,48 @@
+services:
+  lb:
+    image: haproxy:2.9-alpine
+    platform: linux/amd64
+    ports:
+      - "9999:9999"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - api1
+      - api2
+    deploy:
+      resources:
+        limits:
+          cpus: "0.15"
+          memory: "32MB"
+
+  api1:
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:latest
+    platform: linux/amd64
+    build: .
+    environment:
+      BIND_ADDR: 0.0.0.0:8080
+      INDEX_PATH: /app/data/references.idx
+      WORKERS: "1"
+      MIN_CANDIDATES: "16000"
+      MAX_CANDIDATES: "32000"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.425"
+          memory: "156MB"
+
+  api2:
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:latest
+    platform: linux/amd64
+    build: .
+    environment:
+      BIND_ADDR: 0.0.0.0:8080
+      INDEX_PATH: /app/data/references.idx
+      WORKERS: "1"
+      MIN_CANDIDATES: "16000"
+      MAX_CANDIDATES: "32000"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.425"
+          memory: "156MB"

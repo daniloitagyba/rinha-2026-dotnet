@@ -22,3 +22,10 @@ INDEX_PATH=data/references.idx dotnet run -c Release --project src/RinhaFraud/Ri
 ```
 
 Para submissao, publique a imagem `linux/amd64` com `/app/data/references.idx` incluido e use os arquivos da pasta `submission`.
+
+## Publicacao da imagem
+
+A imagem `ghcr.io/daniloitagyba/rinha-2026-dotnet:latest` e publicada pela workflow
+`Publish image`. Depois da primeira publicacao no GHCR, marque o pacote como publico em
+Package settings > Danger Zone > Change visibility > Public. O teste oficial precisa
+baixar essa imagem sem autenticacao.

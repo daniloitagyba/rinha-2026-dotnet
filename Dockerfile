@@ -2,7 +2,7 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS builder
 
 WORKDIR /src
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends clang zlib1g-dev gzip ca-certificates \
+    && apt-get install -y --no-install-recommends clang zlib1g-dev gzip ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
@@ -19,7 +19,12 @@ RUN mkdir -p /out/data \
          gzip -dc resources/references.json.gz | /out/app/RinhaFraud build-index /out/data/references.idx ; \
        elif [ -f data/references.idx ]; then \
          cp data/references.idx /out/data/references.idx ; \
-       fi
+       else \
+         curl -fsSL https://raw.githubusercontent.com/zanfranceschi/rinha-de-backend-2026/main/resources/references.json.gz \
+           | gzip -dc \
+           | /out/app/RinhaFraud build-index /out/data/references.idx ; \
+       fi \
+    && test -s /out/data/references.idx
 
 FROM debian:bookworm-slim
 

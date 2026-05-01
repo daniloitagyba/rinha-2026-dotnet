@@ -12,7 +12,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.10"
+          cpus: "0.15"
           memory: "32MB"
 
   api1:
@@ -22,12 +22,12 @@ services:
       BIND_ADDR: 0.0.0.0:8080
       INDEX_PATH: /app/data/references.idx
       WORKERS: "1"
-      MIN_CANDIDATES: "16000"
-      MAX_CANDIDATES: "44000"
+      MIN_CANDIDATES: "24000"
+      MAX_CANDIDATES: "48000"
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.425"
           memory: "156MB"
 
   api2:
@@ -37,10 +37,10 @@ services:
       BIND_ADDR: 0.0.0.0:8080
       INDEX_PATH: /app/data/references.idx
       WORKERS: "1"
-      MIN_CANDIDATES: "16000"
-      MAX_CANDIDATES: "44000"
+      MIN_CANDIDATES: "24000"
+      MAX_CANDIDATES: "48000"
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.425"
           memory: "156MB"

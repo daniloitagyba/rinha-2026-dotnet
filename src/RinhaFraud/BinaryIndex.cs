@@ -80,7 +80,10 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var bucketItemsOffset = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[56..]));
             var fileLength = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[64..]));
 
-            if (version != 1 || dim != Constants.Dim || scale != Constants.Scale || bucketCount != Constants.BucketCount)
+            if (version != 1 ||
+                dim != Constants.Dim ||
+                scale != Constants.Scale ||
+                bucketCount != Constants.BucketCount)
             {
                 throw new InvalidOperationException("unsupported index version or shape");
             }
@@ -146,33 +149,61 @@ internal unsafe sealed class BinaryIndex : IDisposable
         }
         else
         {
-            Span<ushort> keys = stackalloc ushort[Constants.BucketCount];
             Span<byte> seen = stackalloc byte[Constants.BucketCount];
-            var keyCount = Vectorizer.NeighborKeys(query, keys, seen);
+            seen.Clear();
             var candidates = 0;
+            var amount = Vectorizer.Bucket8(query[0]);
+            var ratio = Vectorizer.Bucket8(query[2]);
+            var kmHome = Vectorizer.Bucket8(query[7]);
+            var hour = Vectorizer.Bucket4(query[3]);
+            var noLast = query[5] < 0 ? 1 : 0;
 
-            for (var keyIndex = 0; keyIndex < keyCount; keyIndex++)
+            for (var radius = 0; radius < 8; radius++)
             {
-                var key = keys[keyIndex];
-                var start = BucketOffset(key);
-                var end = BucketOffset(key + 1);
-                for (var itemPos = start; itemPos < end; itemPos++)
+                for (var a = Math.Max(amount - radius, 0); a <= Math.Min(amount + radius, 7); a++)
                 {
-                    var id = BucketItem(itemPos);
-                    Consider(id, query, topDist, topLabel);
-                    candidates++;
-                    if (candidates >= searchParams.MaxCandidates)
+                    for (var r = Math.Max(ratio - radius, 0); r <= Math.Min(ratio + radius, 7); r++)
                     {
-                        break;
-                    }
-                }
+                        for (var k = Math.Max(kmHome - radius, 0); k <= Math.Min(kmHome + radius, 7); k++)
+                        {
+                            for (var h = Math.Max(hour - radius, 0); h <= Math.Min(hour + radius, 3); h++)
+                            {
+                                var lastStart = radius >= 2 ? 0 : noLast;
+                                var lastEnd = radius >= 2 ? 1 : noLast;
+                                for (var last = lastStart; last <= lastEnd; last++)
+                                {
+                                    var key = a | (r << 3) | (k << 6) | (h << 9) | (last << 11);
+                                    if (seen[key] != 0)
+                                    {
+                                        continue;
+                                    }
 
-                if (candidates >= searchParams.MaxCandidates || candidates >= searchParams.MinCandidates)
-                {
-                    break;
+                                    seen[key] = 1;
+                                    var start = BucketOffset(key);
+                                    var end = BucketOffset(key + 1);
+                                    for (var itemPos = start; itemPos < end; itemPos++)
+                                    {
+                                        var id = BucketItem(itemPos);
+                                        Consider(id, query, topDist, topLabel);
+                                        candidates++;
+                                        if (candidates >= searchParams.MaxCandidates)
+                                        {
+                                            goto CandidateSearchDone;
+                                        }
+                                    }
+
+                                    if (candidates >= searchParams.MinCandidates)
+                                    {
+                                        goto CandidateSearchDone;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
+CandidateSearchDone:
             if (candidates < Constants.K)
             {
                 for (uint id = 0; id < _count; id++)

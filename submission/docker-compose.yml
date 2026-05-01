@@ -22,8 +22,8 @@ services:
       BIND_ADDR: 0.0.0.0:8080
       INDEX_PATH: /app/data/references.idx
       WORKERS: "1"
-      MIN_CANDIDATES: "16000"
-      MAX_CANDIDATES: "32000"
+      MIN_CANDIDATES: "22000"
+      MAX_CANDIDATES: "44000"
     deploy:
       resources:
         limits:
@@ -37,8 +37,8 @@ services:
       BIND_ADDR: 0.0.0.0:8080
       INDEX_PATH: /app/data/references.idx
       WORKERS: "1"
-      MIN_CANDIDATES: "16000"
-      MAX_CANDIDATES: "32000"
+      MIN_CANDIDATES: "22000"
+      MAX_CANDIDATES: "44000"
     deploy:
       resources:
         limits:

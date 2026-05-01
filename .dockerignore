@@ -3,4 +3,5 @@
 .git/
 .gitignore
 test/results.json
+results/
 data/references-*.idx

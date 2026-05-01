@@ -142,12 +142,12 @@ internal static class Vectorizer
         return (short)Math.Round(value * Constants.Scale, MidpointRounding.AwayFromZero);
     }
 
-    private static int Bucket8(short value)
+    public static int Bucket8(short value)
     {
         return value <= 0 ? 0 : Math.Clamp(value * 8 / (Constants.Scale + 1), 0, 7);
     }
 
-    private static int Bucket4(short value)
+    public static int Bucket4(short value)
     {
         return value <= 0 ? 0 : Math.Clamp(value * 4 / (Constants.Scale + 1), 0, 3);
     }

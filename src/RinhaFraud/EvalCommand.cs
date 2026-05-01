@@ -103,7 +103,7 @@ internal static class EvalCommand
 
         Console.WriteLine($"index={indexPath}");
         Console.WriteLine(
-            $"params min_candidates={searchParams.MinCandidates} max_candidates={searchParams.MaxCandidates} flat={searchParams.Flat}");
+            $"params early_candidates={searchParams.EarlyCandidates} min_candidates={searchParams.MinCandidates} max_candidates={searchParams.MaxCandidates} flat={searchParams.Flat}");
         Console.WriteLine($"total={total} measured={measured} correct={correct} accuracy={accuracy:F6}");
         Console.WriteLine($"fp={fp} fn={fn} parse_errors={parseErrors} weighted_errors={weightedErrors} failure_rate={failureRate:F6} score_det={detectionScore:F2}");
         Console.WriteLine($"elapsed_ms={started.ElapsedMilliseconds} throughput_per_s={throughput:F1}");

@@ -4,12 +4,14 @@ using System;
 
 internal readonly struct SearchParams
 {
+    public readonly int EarlyCandidates;
     public readonly int MinCandidates;
     public readonly int MaxCandidates;
     public readonly bool Flat;
 
-    public SearchParams(int minCandidates, int maxCandidates, bool flat)
+    public SearchParams(int earlyCandidates, int minCandidates, int maxCandidates, bool flat)
     {
+        EarlyCandidates = Math.Clamp(earlyCandidates, Constants.K, minCandidates);
         MinCandidates = minCandidates;
         MaxCandidates = Math.Max(maxCandidates, minCandidates);
         Flat = flat;
@@ -19,7 +21,9 @@ internal readonly struct SearchParams
     {
         var minCandidates = EnvInt("MIN_CANDIDATES", 10_000);
         var maxCandidates = Math.Max(EnvInt("MAX_CANDIDATES", 40_000), minCandidates);
+        var earlyCandidates = EnvInt("EARLY_CANDIDATES", minCandidates);
         return new SearchParams(
+            earlyCandidates,
             minCandidates,
             maxCandidates,
             Environment.GetEnvironmentVariable("SEARCH_MODE") == "flat");

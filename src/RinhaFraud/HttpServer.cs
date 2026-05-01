@@ -38,7 +38,7 @@ internal static class HttpServer
         listener.Start(4096);
 
         Console.Error.WriteLine(
-            $"serving on {bindAddress}, index={indexPath}, workers={workerCount}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}");
+            $"serving on {bindAddress}, index={indexPath}, workers={workerCount}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}");
 
         for (var i = 0; i < workerCount; i++)
         {

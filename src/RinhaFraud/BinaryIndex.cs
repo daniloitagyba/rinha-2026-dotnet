@@ -192,6 +192,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
                                         }
                                     }
 
+                                    if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel))
+                                    {
+                                        goto CandidateSearchDone;
+                                    }
+
                                     if (candidates >= searchParams.MinCandidates)
                                     {
                                         goto CandidateSearchDone;
@@ -223,6 +228,17 @@ CandidateSearchDone:
         }
 
         return frauds;
+    }
+
+    private static bool StrongDecision(ReadOnlySpan<byte> topLabel)
+    {
+        var frauds = 0;
+        for (var i = 0; i < Constants.K; i++)
+        {
+            frauds += topLabel[i];
+        }
+
+        return frauds <= 1 || frauds >= 4;
     }
 
     private void Consider(uint id, ReadOnlySpan<short> query, Span<long> topDist, Span<byte> topLabel)

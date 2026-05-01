@@ -16,7 +16,7 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:latest
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:e70235ace86c5cf683da38928ef2172906ef2646
     platform: linux/amd64
     environment:
       BIND_ADDR: 0.0.0.0:8080
@@ -31,7 +31,7 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:latest
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:e70235ace86c5cf683da38928ef2172906ef2646
     platform: linux/amd64
     environment:
       BIND_ADDR: 0.0.0.0:8080

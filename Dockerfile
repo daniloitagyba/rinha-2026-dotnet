@@ -31,6 +31,7 @@ COPY --from=builder /out/data /app/data
 
 ENV BIND_ADDR=0.0.0.0:8080
 ENV INDEX_PATH=/app/data/references.idx
+ENV SERVER_MODE=kestrel
 ENV WORKERS=1
 ENV EARLY_CANDIDATES=16200
 ENV MIN_CANDIDATES=16200

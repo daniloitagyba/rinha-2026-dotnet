@@ -10,6 +10,10 @@ param(
     [string]$ProfileMinCount = $env:PROFILE_MIN_COUNT,
     [string]$ExactFallback = $env:EXACT_FALLBACK,
     [string]$Workers = $env:WORKERS,
+    [string]$ServerMode = $env:SERVER_MODE,
+    [string]$ThreadPoolMinThreads = $env:TP_MIN_THREADS,
+    [string]$KeepAliveRequests = $env:KEEP_ALIVE_REQUESTS,
+    [string]$KeepAliveIdleMs = $env:KEEP_ALIVE_IDLE_MS,
     [switch]$KeepServices,
     [switch]$RefreshData,
     [switch]$Pull
@@ -44,6 +48,10 @@ $apiOverrides = [ordered]@{
     "PROFILE_MIN_COUNT" = $ProfileMinCount
     "EXACT_FALLBACK" = $ExactFallback
     "WORKERS" = $Workers
+    "SERVER_MODE" = $ServerMode
+    "TP_MIN_THREADS" = $ThreadPoolMinThreads
+    "KEEP_ALIVE_REQUESTS" = $KeepAliveRequests
+    "KEEP_ALIVE_IDLE_MS" = $KeepAliveIdleMs
 }
 
 $activeApiOverrides = @()

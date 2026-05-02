@@ -33,7 +33,15 @@ internal static class Program
                 return 0;
 
             case "serve":
-                HttpServer.Serve();
+                if (string.Equals(Environment.GetEnvironmentVariable("SERVER_MODE"), "kestrel", StringComparison.OrdinalIgnoreCase))
+                {
+                    KestrelServer.Serve();
+                }
+                else
+                {
+                    HttpServer.Serve();
+                }
+
                 return 0;
 
             case "eval":

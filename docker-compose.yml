@@ -22,6 +22,7 @@ services:
     environment:
       BIND_ADDR: 0.0.0.0:8080
       INDEX_PATH: /app/data/references.idx
+      SERVER_MODE: kestrel
       WORKERS: "1"
       EARLY_CANDIDATES: "16200"
       MIN_CANDIDATES: "16200"
@@ -42,6 +43,7 @@ services:
     environment:
       BIND_ADDR: 0.0.0.0:8080
       INDEX_PATH: /app/data/references.idx
+      SERVER_MODE: kestrel
       WORKERS: "1"
       EARLY_CANDIDATES: "16200"
       MIN_CANDIDATES: "16200"

@@ -16,17 +16,18 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:fastprofile-c30-36-72
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:fastprofile-risky-c16200-16200-32400-w1
     platform: linux/amd64
     environment:
       BIND_ADDR: 0.0.0.0:8080
       INDEX_PATH: /app/data/references.idx
       WORKERS: "1"
-      EARLY_CANDIDATES: "30000"
-      MIN_CANDIDATES: "36000"
-      MAX_CANDIDATES: "72000"
+      EARLY_CANDIDATES: "16200"
+      MIN_CANDIDATES: "16200"
+      MAX_CANDIDATES: "32400"
       PROFILE_FASTPATH: "1"
       PROFILE_MIN_COUNT: "20"
+      EXACT_FALLBACK: "risky"
     deploy:
       resources:
         limits:
@@ -34,17 +35,18 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:fastprofile-c30-36-72
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:fastprofile-risky-c16200-16200-32400-w1
     platform: linux/amd64
     environment:
       BIND_ADDR: 0.0.0.0:8080
       INDEX_PATH: /app/data/references.idx
       WORKERS: "1"
-      EARLY_CANDIDATES: "30000"
-      MIN_CANDIDATES: "36000"
-      MAX_CANDIDATES: "72000"
+      EARLY_CANDIDATES: "16200"
+      MIN_CANDIDATES: "16200"
+      MAX_CANDIDATES: "32400"
       PROFILE_FASTPATH: "1"
       PROFILE_MIN_COUNT: "20"
+      EXACT_FALLBACK: "risky"
     deploy:
       resources:
         limits:

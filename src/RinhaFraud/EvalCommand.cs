@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 
 internal static class EvalCommand
 {
@@ -12,8 +13,12 @@ internal static class EvalCommand
         var indexPath = Environment.GetEnvironmentVariable("INDEX_PATH") ?? "data/references.idx";
         var limit = EnvInt("EVAL_LIMIT", int.MaxValue);
         var searchParams = SearchParams.FromEnvironment();
+        var errorsPath = Environment.GetEnvironmentVariable("EVAL_ERRORS_PATH");
         var data = File.ReadAllBytes(inputPath);
         using var index = BinaryIndex.Open(indexPath);
+        using var errorWriter = string.IsNullOrWhiteSpace(errorsPath)
+            ? null
+            : new StreamWriter(errorsPath, false, Encoding.UTF8, 1 << 16);
 
         var cursor = 0;
         var total = 0;
@@ -21,6 +26,7 @@ internal static class EvalCommand
         var fp = 0;
         var fn = 0;
         var parseErrors = 0;
+        Span<int> fraudCountBuckets = stackalloc int[Constants.K + 1];
         var latencies = new List<long>(Math.Min(100_000, Math.Max(1024, limit)));
         var queryBuffer = new short[Constants.Dim];
         var started = Stopwatch.StartNew();
@@ -57,12 +63,13 @@ internal static class EvalCommand
 
             var itemStarted = Stopwatch.GetTimestamp();
             var approved = true;
+            var fraudCount = 0;
             var request = data.AsSpan(requestStart, requestEnd - requestStart + 1);
             if (PayloadParser.TryParse(request, out var payload))
             {
                 var query = queryBuffer.AsSpan();
                 Vectorizer.Vectorize(payload, query);
-                var fraudCount = index.ClassifyFraudCount(query, searchParams);
+                fraudCount = index.ClassifyFraudCount(query, searchParams);
                 approved = fraudCount < 3;
             }
             else
@@ -70,6 +77,7 @@ internal static class EvalCommand
                 parseErrors++;
             }
 
+            fraudCountBuckets[Math.Clamp(fraudCount, 0, Constants.K)]++;
             latencies.Add(Stopwatch.GetTimestamp() - itemStarted);
             if (approved == expectedApproved)
             {
@@ -82,6 +90,19 @@ internal static class EvalCommand
             else
             {
                 fp++;
+            }
+
+            if (approved != expectedApproved && errorWriter is not null)
+            {
+                errorWriter.Write("{\"expected_approved\":");
+                errorWriter.Write(expectedApproved ? "true" : "false");
+                errorWriter.Write(",\"approved\":");
+                errorWriter.Write(approved ? "true" : "false");
+                errorWriter.Write(",\"fraud_count\":");
+                errorWriter.Write(fraudCount);
+                errorWriter.Write(",\"request\":");
+                errorWriter.Write(Encoding.UTF8.GetString(request));
+                errorWriter.WriteLine("}");
             }
 
             total++;
@@ -103,11 +124,13 @@ internal static class EvalCommand
 
         Console.WriteLine($"index={indexPath}");
         Console.WriteLine(
-            $"params early_candidates={searchParams.EarlyCandidates} min_candidates={searchParams.MinCandidates} max_candidates={searchParams.MaxCandidates} flat={searchParams.Flat}");
+            $"params early_candidates={searchParams.EarlyCandidates} min_candidates={searchParams.MinCandidates} max_candidates={searchParams.MaxCandidates} flat={searchParams.Flat} profile_fastpath={searchParams.ProfileFastPath} profile_min_count={searchParams.ProfileMinCount} exact_fallback={searchParams.ExactFallback}");
         Console.WriteLine($"total={total} measured={measured} correct={correct} accuracy={accuracy:F6}");
         Console.WriteLine($"fp={fp} fn={fn} parse_errors={parseErrors} weighted_errors={weightedErrors} failure_rate={failureRate:F6} score_det={detectionScore:F2}");
         Console.WriteLine($"elapsed_ms={started.ElapsedMilliseconds} throughput_per_s={throughput:F1}");
         Console.WriteLine($"classify_latency_ns p50={TicksToNs(p50)} p95={TicksToNs(p95)} p99={TicksToNs(p99)}");
+        Console.WriteLine(
+            $"fraud_count_buckets 0={fraudCountBuckets[0]} 1={fraudCountBuckets[1]} 2={fraudCountBuckets[2]} 3={fraudCountBuckets[3]} 4={fraudCountBuckets[4]} 5={fraudCountBuckets[5]}");
     }
 
     private static bool TryObjectAfterKey(ReadOnlySpan<byte> data, int keyPos, out int start, out int end)

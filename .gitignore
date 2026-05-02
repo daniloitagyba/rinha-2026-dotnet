@@ -1,5 +1,9 @@
 bin/
 obj/
 data/*.idx
+resources/references.json.gz
 results/*.json
-test/results.json
+test/results*.json
+test/test-data.json
+test/errors*.json
+test/errors*.jsonl

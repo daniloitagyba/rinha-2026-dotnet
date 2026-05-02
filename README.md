@@ -21,6 +21,64 @@ scripts/build-index.sh resources/references.json.gz data/references.idx
 INDEX_PATH=data/references.idx dotnet run -c Release --project src/RinhaFraud/RinhaFraud.csproj -- eval test/test-data.json
 ```
 
+## Teste local proximo da engine
+
+O teste mais comparavel com o resultado remoto roda Docker Compose + k6, usando a
+mesma massa oficial e gerando `test/results.json` no mesmo formato da engine.
+
+No Windows/PowerShell:
+
+```powershell
+.\scripts\k6-local.ps1
+```
+
+No Linux/WSL:
+
+```sh
+sh scripts/k6-local.sh
+```
+
+Por padrao o script usa `submission/docker-compose.yml`, ou seja, testa a mesma
+imagem/tag submetida. Para testar o codigo local com build da imagem:
+
+```powershell
+.\scripts\k6-local.ps1 -Mode build
+```
+
+```sh
+MODE=build sh scripts/k6-local.sh
+```
+
+Os defaults do `test/rinha-test.js` seguem o teste publico oficial: rampa de
+120s ate 900 req/s, `maxVUs=250`, timeout de `2001ms` e formula de pontuacao da
+documentacao.
+
+Para validar o encadeamento sem esperar a rampa completa:
+
+```powershell
+$env:TARGET_RATE = "10"; $env:RAMP_DURATION = "5s"; .\scripts\k6-local.ps1
+```
+
+Para testar uma combinacao sem alterar a submissao:
+
+```powershell
+.\scripts\k6-local.ps1 -EarlyCandidates 18000 -MinCandidates 18000 -MaxCandidates 36000 -Workers 1
+```
+
+O perfil padrao da submissao usa `EXACT_FALLBACK=risky`, `WORKERS=1` e
+`EARLY_CANDIDATES/MIN_CANDIDATES/MAX_CANDIDATES=16200/16200/32400`: a busca aproximada
+continua no caminho quente, mas os casos de fronteira executam KNN exato para
+zerar falso positivo/falso negativo na massa oficial local. Para comparar:
+
+```powershell
+$env:EXACT_FALLBACK = "off"; .\scripts\k6-local.ps1 -Mode build
+$env:EXACT_FALLBACK = "profile"; .\scripts\k6-local.ps1 -Mode build
+```
+
+`off` prioriza p99 e aceita uma pequena taxa de erro. `profile` roda KNN exato
+em todo miss do fast path e e o modo mais conservador, mas reduz bastante o
+throughput sob carga.
+
 Para submissao, publique a imagem `linux/amd64` com `/app/data/references.idx` incluido e use os arquivos da pasta `submission`.
 
 ## Publicacao da imagem

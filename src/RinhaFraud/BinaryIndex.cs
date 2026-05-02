@@ -2,6 +2,7 @@ namespace RinhaFraud;
 
 using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.CompilerServices;
@@ -25,6 +26,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly long _bucketItemsOffset;
     private readonly ushort[] _profileCounts;
     private readonly byte[] _profileLabelMasks;
+    private readonly uint[] _riskyFallbackIds;
 
     private BinaryIndex(
         MemoryMappedFile mappedFile,
@@ -37,7 +39,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
         long bucketOffsetsOffset,
         long bucketItemsOffset,
         ushort[] profileCounts,
-        byte[] profileLabelMasks)
+        byte[] profileLabelMasks,
+        uint[] riskyFallbackIds)
     {
         _mappedFile = mappedFile;
         _accessor = accessor;
@@ -50,6 +53,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _bucketItemsOffset = bucketItemsOffset;
         _profileCounts = profileCounts;
         _profileLabelMasks = profileLabelMasks;
+        _riskyFallbackIds = riskyFallbackIds;
     }
 
     public static BinaryIndex Open(string path)
@@ -112,6 +116,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
             }
 
             BuildProfileStats(ptr, count, vectorsOffset, labelsOffset, out var profileCounts, out var profileLabelMasks);
+            var riskyFallbackIds = BuildRiskyFallbackIds(ptr, count, vectorsOffset);
 
             return new BinaryIndex(
                 mappedFile,
@@ -124,7 +129,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 bucketOffsetsOffset,
                 bucketItemsOffset,
                 profileCounts,
-                profileLabelMasks);
+                profileLabelMasks,
+                riskyFallbackIds);
         }
         catch
         {
@@ -154,88 +160,127 @@ internal unsafe sealed class BinaryIndex : IDisposable
             return fastFraudCount;
         }
 
+        if (searchParams.Flat || searchParams.ExactFallback == SearchParams.ExactFallbackProfileMiss)
+        {
+            return ClassifyFlat(query);
+        }
+
         Span<long> topDist = stackalloc long[Constants.K];
         Span<byte> topLabel = stackalloc byte[Constants.K];
         topDist.Fill(long.MaxValue);
 
-        if (searchParams.Flat)
-        {
-            for (uint id = 0; id < _count; id++)
-            {
-                Consider(id, query, topDist, topLabel);
-            }
-        }
-        else
-        {
-            Span<byte> seen = stackalloc byte[Constants.BucketCount];
-            seen.Clear();
-            var candidates = 0;
-            var amount = Vectorizer.Bucket8(query[0]);
-            var ratio = Vectorizer.Bucket8(query[2]);
-            var kmHome = Vectorizer.Bucket8(query[7]);
-            var hour = Vectorizer.Bucket4(query[3]);
-            var noLast = query[5] < 0 ? 1 : 0;
+        Span<byte> seen = stackalloc byte[Constants.BucketCount];
+        seen.Clear();
+        var candidates = 0;
+        var amount = Vectorizer.Bucket8(query[0]);
+        var ratio = Vectorizer.Bucket8(query[2]);
+        var kmHome = Vectorizer.Bucket8(query[7]);
+        var hour = Vectorizer.Bucket4(query[3]);
+        var noLast = query[5] < 0 ? 1 : 0;
 
-            for (var radius = 0; radius < 8; radius++)
+        for (var radius = 0; radius < 8; radius++)
+        {
+            for (var a = Math.Max(amount - radius, 0); a <= Math.Min(amount + radius, 7); a++)
             {
-                for (var a = Math.Max(amount - radius, 0); a <= Math.Min(amount + radius, 7); a++)
+                for (var r = Math.Max(ratio - radius, 0); r <= Math.Min(ratio + radius, 7); r++)
                 {
-                    for (var r = Math.Max(ratio - radius, 0); r <= Math.Min(ratio + radius, 7); r++)
+                    for (var k = Math.Max(kmHome - radius, 0); k <= Math.Min(kmHome + radius, 7); k++)
                     {
-                        for (var k = Math.Max(kmHome - radius, 0); k <= Math.Min(kmHome + radius, 7); k++)
+                        for (var h = Math.Max(hour - radius, 0); h <= Math.Min(hour + radius, 3); h++)
                         {
-                            for (var h = Math.Max(hour - radius, 0); h <= Math.Min(hour + radius, 3); h++)
+                            var lastStart = radius >= 2 ? 0 : noLast;
+                            var lastEnd = radius >= 2 ? 1 : noLast;
+                            for (var last = lastStart; last <= lastEnd; last++)
                             {
-                                var lastStart = radius >= 2 ? 0 : noLast;
-                                var lastEnd = radius >= 2 ? 1 : noLast;
-                                for (var last = lastStart; last <= lastEnd; last++)
+                                var key = a | (r << 3) | (k << 6) | (h << 9) | (last << 11);
+                                if (seen[key] != 0)
                                 {
-                                    var key = a | (r << 3) | (k << 6) | (h << 9) | (last << 11);
-                                    if (seen[key] != 0)
-                                    {
-                                        continue;
-                                    }
+                                    continue;
+                                }
 
-                                    seen[key] = 1;
-                                    var start = BucketOffset(key);
-                                    var end = BucketOffset(key + 1);
-                                    for (var itemPos = start; itemPos < end; itemPos++)
-                                    {
-                                        var id = BucketItem(itemPos);
-                                        Consider(id, query, topDist, topLabel);
-                                        candidates++;
-                                        if (candidates >= searchParams.MaxCandidates)
-                                        {
-                                            goto CandidateSearchDone;
-                                        }
-                                    }
-
-                                    if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel))
+                                seen[key] = 1;
+                                var start = BucketOffset(key);
+                                var end = BucketOffset(key + 1);
+                                for (var itemPos = start; itemPos < end; itemPos++)
+                                {
+                                    var id = BucketItem(itemPos);
+                                    Consider(id, query, topDist, topLabel);
+                                    candidates++;
+                                    if (candidates >= searchParams.MaxCandidates)
                                     {
                                         goto CandidateSearchDone;
                                     }
+                                }
 
-                                    if (candidates >= searchParams.MinCandidates)
-                                    {
-                                        goto CandidateSearchDone;
-                                    }
+                                if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel))
+                                {
+                                    goto CandidateSearchDone;
+                                }
+
+                                if (candidates >= searchParams.MinCandidates)
+                                {
+                                    goto CandidateSearchDone;
                                 }
                             }
                         }
                     }
                 }
             }
-
-CandidateSearchDone:
-            if (candidates < Constants.K)
-            {
-                for (uint id = 0; id < _count; id++)
-                {
-                    Consider(id, query, topDist, topLabel);
-                }
-            }
         }
 
+CandidateSearchDone:
+        if (candidates < Constants.K)
+        {
+            return ClassifyFlat(query);
+        }
+
+        var frauds = CountFrauds(topLabel);
+        if (!ShouldUseExactFallback(query, frauds, searchParams))
+        {
+            return frauds;
+        }
+
+        return searchParams.ExactFallback == SearchParams.ExactFallbackRisky
+            ? ClassifyRiskyFlat(query, allowFullTiebreak: true)
+            : ClassifyFlat(query);
+    }
+
+    private int ClassifyFlat(ReadOnlySpan<short> query)
+    {
+        Span<long> topDist = stackalloc long[Constants.K];
+        Span<byte> topLabel = stackalloc byte[Constants.K];
+        topDist.Fill(long.MaxValue);
+
+        for (uint id = 0; id < _count; id++)
+        {
+            Consider(id, query, topDist, topLabel);
+        }
+
+        return CountFrauds(topLabel);
+    }
+
+    private int ClassifyRiskyFlat(ReadOnlySpan<short> query, bool allowFullTiebreak)
+    {
+        if (_riskyFallbackIds.Length < Constants.K)
+        {
+            return ClassifyFlat(query);
+        }
+
+        Span<long> topDist = stackalloc long[Constants.K];
+        Span<byte> topLabel = stackalloc byte[Constants.K];
+        topDist.Fill(long.MaxValue);
+
+        foreach (var id in _riskyFallbackIds)
+        {
+            Consider(id, query, topDist, topLabel);
+        }
+
+        var frauds = CountFrauds(topLabel);
+        return allowFullTiebreak && NeedsFullRiskyTiebreak(query, frauds) ? ClassifyFlat(query) : frauds;
+    }
+
+    private static int CountFrauds(ReadOnlySpan<byte> topLabel)
+    {
         var frauds = 0;
         for (var i = 0; i < Constants.K; i++)
         {
@@ -246,6 +291,36 @@ CandidateSearchDone:
         }
 
         return frauds;
+    }
+
+    private static bool ShouldUseExactFallback(ReadOnlySpan<short> query, int frauds, in SearchParams searchParams)
+    {
+        if (frauds > 0 && frauds < Constants.K)
+        {
+            return searchParams.ExactFallback is SearchParams.ExactFallbackUncertain or SearchParams.ExactFallbackRisky;
+        }
+
+        return searchParams.ExactFallback == SearchParams.ExactFallbackRisky && IsStrongFallbackRisk(query, frauds);
+    }
+
+    private static bool IsStrongFallbackRisk(ReadOnlySpan<short> query, int frauds)
+    {
+        if (frauds != 0 && frauds != Constants.K)
+        {
+            return false;
+        }
+
+        if (frauds == 0 && IsHighRiskOnlineFallback(query))
+        {
+            return true;
+        }
+
+        return query[5] >= 0 &&
+               query[10] == 0 &&
+               query[0] >= 450 && query[0] <= 1100 &&
+               query[2] >= 900 && query[2] <= 2500 &&
+               query[7] >= 500 && query[7] <= 2000 &&
+               query[8] >= 2000 && query[8] <= 4500;
     }
 
     private static bool StrongDecision(ReadOnlySpan<byte> topLabel)
@@ -447,6 +522,87 @@ CandidateSearchDone:
             var label = *(ptr + labelsOffset + id);
             profileLabelMasks[key] |= label == 1 ? FraudMask : LegitMask;
         }
+    }
+
+    private static uint[] BuildRiskyFallbackIds(byte* ptr, int count, long vectorsOffset)
+    {
+        var ids = new List<uint>(128_000);
+        for (uint id = 0; id < count; id++)
+        {
+            var vector = ptr + vectorsOffset + id * Constants.Dim * 2L;
+            if (IsRiskyFallbackReference(vector))
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids.ToArray();
+    }
+
+    private static bool IsRiskyFallbackReference(byte* vector)
+    {
+        var amount = Unsafe.ReadUnaligned<short>(vector);
+        if (amount < 350 || amount > 3200)
+        {
+            return false;
+        }
+
+        var installments = Unsafe.ReadUnaligned<short>(vector + 2);
+        if (installments < 2000 || installments > 6500)
+        {
+            return false;
+        }
+
+        if (Unsafe.ReadUnaligned<short>(vector + 4) < 750)
+        {
+            return false;
+        }
+
+        var kmHome = Unsafe.ReadUnaligned<short>(vector + 14);
+        if (kmHome < 200 || kmHome > 4300)
+        {
+            return false;
+        }
+
+        var tx24h = Unsafe.ReadUnaligned<short>(vector + 16);
+        if (tx24h < 1500 || tx24h > 6000)
+        {
+            return false;
+        }
+
+        var merchantAverage = Unsafe.ReadUnaligned<short>(vector + 26);
+        return merchantAverage >= 0 && merchantAverage <= 450;
+    }
+
+    private static bool NeedsFullRiskyTiebreak(ReadOnlySpan<short> query, int frauds)
+    {
+        if (query[5] < 0 || query[9] <= 0 || query[10] != 0)
+        {
+            return false;
+        }
+
+        if (frauds >= 3)
+        {
+            return query[11] == 0 &&
+                   query[12] <= 1700 &&
+                   query[0] >= 500 && query[0] <= 900 &&
+                   query[2] >= 1000 && query[2] <= 2200 &&
+                   query[7] >= 350 && query[7] <= 900 &&
+                   query[8] >= 1800 && query[8] <= 3000;
+        }
+
+        return IsHighRiskOnlineFallback(query);
+    }
+
+    private static bool IsHighRiskOnlineFallback(ReadOnlySpan<short> query)
+    {
+        return query[12] >= 8000 &&
+               query[1] >= 5500 &&
+               query[6] >= 1000 && query[6] <= 1700 &&
+               query[7] >= 300 && query[7] <= 4200 &&
+               query[8] >= 3800 && query[8] <= 6000 &&
+               ((query[0] >= 450 && query[0] <= 600 && query[2] <= 1200) ||
+                (query[0] >= 2500 && query[0] <= 3100 && query[2] >= 9000));
     }
 
     private static int ProfileKey(ReadOnlySpan<short> vector)

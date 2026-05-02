@@ -28,16 +28,16 @@ FROM debian:bookworm-slim
 WORKDIR /app
 COPY --from=builder /out/app/RinhaFraud /usr/local/bin/rinha-fraud
 COPY --from=builder /out/data /app/data
-COPY docker/entrypoint.sh /entrypoint.sh
 
 ENV BIND_ADDR=0.0.0.0:8080
 ENV INDEX_PATH=/app/data/references.idx
 ENV WORKERS=1
-ENV EARLY_CANDIDATES=30000
-ENV MIN_CANDIDATES=36000
-ENV MAX_CANDIDATES=72000
+ENV EARLY_CANDIDATES=16200
+ENV MIN_CANDIDATES=16200
+ENV MAX_CANDIDATES=32400
 ENV PROFILE_FASTPATH=1
 ENV PROFILE_MIN_COUNT=20
+ENV EXACT_FALLBACK=risky
 
 EXPOSE 8080
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["rinha-fraud", "serve"]

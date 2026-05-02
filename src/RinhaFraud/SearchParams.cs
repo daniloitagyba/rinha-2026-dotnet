@@ -4,12 +4,18 @@ using System;
 
 internal readonly struct SearchParams
 {
+    public const int ExactFallbackOff = 0;
+    public const int ExactFallbackUncertain = 1;
+    public const int ExactFallbackRisky = 2;
+    public const int ExactFallbackProfileMiss = 3;
+
     public readonly int EarlyCandidates;
     public readonly int MinCandidates;
     public readonly int MaxCandidates;
     public readonly bool Flat;
     public readonly bool ProfileFastPath;
     public readonly int ProfileMinCount;
+    public readonly int ExactFallback;
 
     public SearchParams(
         int earlyCandidates,
@@ -17,7 +23,8 @@ internal readonly struct SearchParams
         int maxCandidates,
         bool flat,
         bool profileFastPath,
-        int profileMinCount)
+        int profileMinCount,
+        int exactFallback)
     {
         EarlyCandidates = Math.Clamp(earlyCandidates, Constants.K, minCandidates);
         MinCandidates = minCandidates;
@@ -25,6 +32,7 @@ internal readonly struct SearchParams
         Flat = flat;
         ProfileFastPath = profileFastPath;
         ProfileMinCount = Math.Max(1, profileMinCount);
+        ExactFallback = Math.Clamp(exactFallback, ExactFallbackOff, ExactFallbackProfileMiss);
     }
 
     public static SearchParams FromEnvironment()
@@ -38,7 +46,8 @@ internal readonly struct SearchParams
             maxCandidates,
             Environment.GetEnvironmentVariable("SEARCH_MODE") == "flat",
             EnvBool("PROFILE_FASTPATH", true),
-            EnvInt("PROFILE_MIN_COUNT", 20));
+            EnvInt("PROFILE_MIN_COUNT", 20),
+            ExactFallbackMode(Environment.GetEnvironmentVariable("EXACT_FALLBACK")));
     }
 
     private static int EnvInt(string name, int fallback)
@@ -50,6 +59,17 @@ internal readonly struct SearchParams
     {
         var value = Environment.GetEnvironmentVariable(name);
         return value is null ? fallback : value is "1" or "true" or "TRUE" or "yes" or "YES";
+    }
+
+    private static int ExactFallbackMode(string? value)
+    {
+        return value switch
+        {
+            "1" or "uncertain" or "UNCERTAIN" => ExactFallbackUncertain,
+            "2" or "risky" or "RISKY" => ExactFallbackRisky,
+            "3" or "profile" or "PROFILE" or "profile_miss" or "PROFILE_MISS" => ExactFallbackProfileMiss,
+            _ => ExactFallbackOff
+        };
     }
 
 }

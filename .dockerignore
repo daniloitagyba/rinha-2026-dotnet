@@ -2,6 +2,9 @@
 **/obj/
 .git/
 .gitignore
-test/results.json
+test/results*.json
+test/test-data.json
+test/errors*.json
+test/errors*.jsonl
 results/
 data/references-*.idx

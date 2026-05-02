@@ -38,7 +38,7 @@ internal static class HttpServer
         listener.Start(4096);
 
         Console.Error.WriteLine(
-            $"serving on {bindAddress}, index={indexPath}, workers={workerCount}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}");
+            $"serving on {bindAddress}, index={indexPath}, workers={workerCount}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, exact_fallback={searchParams.ExactFallback}");
 
         for (var i = 0; i < workerCount; i++)
         {
@@ -86,9 +86,9 @@ internal static class HttpServer
     private static void HandleConnection(Socket socket, BinaryIndex index, SearchParams searchParams)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(Constants.MaxRequestBytes);
-        var used = 0;
         try
         {
+            var used = 0;
             while (true)
             {
                 if (used >= buffer.Length)
@@ -102,7 +102,16 @@ internal static class HttpServer
                     break;
                 }
 
-                var read = socket.Receive(buffer.AsSpan(used, buffer.Length - used));
+                int read;
+                try
+                {
+                    read = socket.Receive(buffer.AsSpan(used, buffer.Length - used));
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
+                {
+                    return;
+                }
+
                 if (read <= 0)
                 {
                     return;
@@ -325,4 +334,5 @@ internal static class HttpServer
 
         return true;
     }
+
 }

@@ -147,6 +147,11 @@ internal static class Vectorizer
         return value <= 0 ? 0 : Math.Clamp(value * 8 / (Constants.Scale + 1), 0, 7);
     }
 
+    public static int Bucket16(short value)
+    {
+        return value <= 0 ? 0 : Math.Clamp(value * 16 / (Constants.Scale + 1), 0, 15);
+    }
+
     public static int Bucket4(short value)
     {
         return value <= 0 ? 0 : Math.Clamp(value * 4 / (Constants.Scale + 1), 0, 3);

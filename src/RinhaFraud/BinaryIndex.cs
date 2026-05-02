@@ -10,6 +10,9 @@ internal unsafe sealed class BinaryIndex : IDisposable
 {
     private static ReadOnlySpan<byte> Magic => "RINHA26I"u8;
     private const int HeaderLength = 80;
+    private const int ProfileKeyCount = 1 << 22;
+    private const byte LegitMask = 1;
+    private const byte FraudMask = 2;
 
     private readonly MemoryMappedFile _mappedFile;
     private readonly MemoryMappedViewAccessor _accessor;
@@ -20,6 +23,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly long _labelsOffset;
     private readonly long _bucketOffsetsOffset;
     private readonly long _bucketItemsOffset;
+    private readonly ushort[] _profileCounts;
+    private readonly byte[] _profileLabelMasks;
 
     private BinaryIndex(
         MemoryMappedFile mappedFile,
@@ -30,7 +35,9 @@ internal unsafe sealed class BinaryIndex : IDisposable
         long vectorsOffset,
         long labelsOffset,
         long bucketOffsetsOffset,
-        long bucketItemsOffset)
+        long bucketItemsOffset,
+        ushort[] profileCounts,
+        byte[] profileLabelMasks)
     {
         _mappedFile = mappedFile;
         _accessor = accessor;
@@ -41,6 +48,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _labelsOffset = labelsOffset;
         _bucketOffsetsOffset = bucketOffsetsOffset;
         _bucketItemsOffset = bucketItemsOffset;
+        _profileCounts = profileCounts;
+        _profileLabelMasks = profileLabelMasks;
     }
 
     public static BinaryIndex Open(string path)
@@ -102,6 +111,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 throw new InvalidOperationException("index offsets out of bounds");
             }
 
+            BuildProfileStats(ptr, count, vectorsOffset, labelsOffset, out var profileCounts, out var profileLabelMasks);
+
             return new BinaryIndex(
                 mappedFile,
                 accessor,
@@ -111,7 +122,9 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 vectorsOffset,
                 labelsOffset,
                 bucketOffsetsOffset,
-                bucketItemsOffset);
+                bucketItemsOffset,
+                profileCounts,
+                profileLabelMasks);
         }
         catch
         {
@@ -136,6 +149,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
 
     public int ClassifyFraudCount(ReadOnlySpan<short> query, in SearchParams searchParams)
     {
+        if (TryProfileFastDecision(query, searchParams, out var fastFraudCount))
+        {
+            return fastFraudCount;
+        }
+
         Span<long> topDist = stackalloc long[Constants.K];
         Span<byte> topLabel = stackalloc byte[Constants.K];
         topDist.Fill(long.MaxValue);
@@ -239,6 +257,36 @@ CandidateSearchDone:
         }
 
         return frauds <= 1 || frauds >= 4;
+    }
+
+    private bool TryProfileFastDecision(ReadOnlySpan<short> query, in SearchParams searchParams, out int fraudCount)
+    {
+        fraudCount = 0;
+        if (!searchParams.ProfileFastPath)
+        {
+            return false;
+        }
+
+        var key = ProfileKey(query);
+        if (_profileCounts[key] < searchParams.ProfileMinCount)
+        {
+            return false;
+        }
+
+        var mask = _profileLabelMasks[key];
+        if (mask == LegitMask)
+        {
+            fraudCount = 0;
+            return true;
+        }
+
+        if (mask == FraudMask)
+        {
+            fraudCount = Constants.K;
+            return true;
+        }
+
+        return false;
     }
 
     private void Consider(uint id, ReadOnlySpan<short> query, Span<long> topDist, Span<byte> topLabel)
@@ -374,6 +422,67 @@ CandidateSearchDone:
     private uint BucketItem(uint pos)
     {
         return Unsafe.ReadUnaligned<uint>(_ptr + _bucketItemsOffset + pos * 4L);
+    }
+
+    private static void BuildProfileStats(
+        byte* ptr,
+        int count,
+        long vectorsOffset,
+        long labelsOffset,
+        out ushort[] profileCounts,
+        out byte[] profileLabelMasks)
+    {
+        profileCounts = new ushort[ProfileKeyCount];
+        profileLabelMasks = new byte[ProfileKeyCount];
+
+        for (uint id = 0; id < count; id++)
+        {
+            var vector = ptr + vectorsOffset + id * Constants.Dim * 2L;
+            var key = ProfileKey(vector);
+            if (profileCounts[key] < ushort.MaxValue)
+            {
+                profileCounts[key]++;
+            }
+
+            var label = *(ptr + labelsOffset + id);
+            profileLabelMasks[key] |= label == 1 ? FraudMask : LegitMask;
+        }
+    }
+
+    private static int ProfileKey(ReadOnlySpan<short> vector)
+    {
+        var key = 0;
+        key |= Vectorizer.Bucket16(vector[2]);
+        key |= Vectorizer.Bucket8(vector[7]) << 4;
+        key |= Vectorizer.Bucket4(vector[8]) << 7;
+        key |= Vectorizer.Bucket4(vector[12]) << 9;
+        key |= Vectorizer.Bucket4(vector[0]) << 11;
+        key |= (vector[5] < 0 ? 1 : 0) << 13;
+        key |= (vector[9] > 0 ? 1 : 0) << 14;
+        key |= (vector[10] > 0 ? 1 : 0) << 15;
+        key |= (vector[11] > 0 ? 1 : 0) << 16;
+        key |= Vectorizer.Bucket4(vector[6]) << 17;
+        key |= (vector[1] > 1000 ? 1 : 0) << 19;
+        key |= Vectorizer.Bucket4(vector[13]) << 20;
+        return key;
+    }
+
+    private static int ProfileKey(byte* vector)
+    {
+        var key = 0;
+        key |= Vectorizer.Bucket16(Unsafe.ReadUnaligned<short>(vector + 4));
+        key |= Vectorizer.Bucket8(Unsafe.ReadUnaligned<short>(vector + 14)) << 4;
+        key |= Vectorizer.Bucket4(Unsafe.ReadUnaligned<short>(vector + 16)) << 7;
+        key |= Vectorizer.Bucket4(Unsafe.ReadUnaligned<short>(vector + 24)) << 9;
+        key |= Vectorizer.Bucket4(Unsafe.ReadUnaligned<short>(vector)) << 11;
+        key |= (Unsafe.ReadUnaligned<short>(vector + 10) < 0 ? 1 : 0) << 13;
+        key |= (Unsafe.ReadUnaligned<short>(vector + 18) > 0 ? 1 : 0) << 14;
+        key |= (Unsafe.ReadUnaligned<short>(vector + 20) > 0 ? 1 : 0) << 15;
+        key |= (Unsafe.ReadUnaligned<short>(vector + 22) > 0 ? 1 : 0) << 16;
+        key |= Vectorizer.Bucket4(Unsafe.ReadUnaligned<short>(vector + 12)) << 17;
+        key |= (Unsafe.ReadUnaligned<short>(vector + 2) > 1000 ? 1 : 0) << 19;
+        key |= Vectorizer.Bucket4(Unsafe.ReadUnaligned<short>(vector + 26)) << 20;
+        return key;
     }
 
     private static byte VolatileRead(byte* ptr)

@@ -61,7 +61,7 @@ internal static class SelfTest
             }
 
             using var index = BinaryIndex.Open(indexPath);
-            var searchParams = new SearchParams(5, 5, 100, flat: false);
+            var searchParams = new SearchParams(5, 5, 100, flat: false, profileFastPath: false, profileMinCount: 20);
 
             Span<short> legitVector = stackalloc short[Constants.Dim];
             var legitBytes = Encoding.UTF8.GetBytes(LegitPayload);

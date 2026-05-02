@@ -12,7 +12,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.10"
+          cpus: "0.15"
           memory: "32MB"
 
   api1:
@@ -23,13 +23,15 @@ services:
       BIND_ADDR: 0.0.0.0:8080
       INDEX_PATH: /app/data/references.idx
       WORKERS: "1"
-      EARLY_CANDIDATES: "14000"
-      MIN_CANDIDATES: "20000"
-      MAX_CANDIDATES: "40000"
+      EARLY_CANDIDATES: "30000"
+      MIN_CANDIDATES: "36000"
+      MAX_CANDIDATES: "72000"
+      PROFILE_FASTPATH: "1"
+      PROFILE_MIN_COUNT: "20"
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.425"
           memory: "156MB"
 
   api2:
@@ -40,11 +42,13 @@ services:
       BIND_ADDR: 0.0.0.0:8080
       INDEX_PATH: /app/data/references.idx
       WORKERS: "1"
-      EARLY_CANDIDATES: "14000"
-      MIN_CANDIDATES: "20000"
-      MAX_CANDIDATES: "40000"
+      EARLY_CANDIDATES: "30000"
+      MIN_CANDIDATES: "36000"
+      MAX_CANDIDATES: "72000"
+      PROFILE_FASTPATH: "1"
+      PROFILE_MIN_COUNT: "20"
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.425"
           memory: "156MB"

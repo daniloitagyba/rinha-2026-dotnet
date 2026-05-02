@@ -2,6 +2,7 @@ namespace RinhaFraud;
 
 using System;
 using System.Buffers;
+using System.IO;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -28,8 +29,9 @@ internal static class KestrelServer
         var bindAddress = Environment.GetEnvironmentVariable("BIND_ADDR") ?? "0.0.0.0:8080";
         var indexPath = Environment.GetEnvironmentVariable("INDEX_PATH") ?? "/app/data/references.idx";
         var searchParams = SearchParams.FromEnvironment();
-        var endpoint = ParseEndpoint(bindAddress);
         var minThreads = EnvInt("TP_MIN_THREADS", 0);
+        var unixSocketPath = ParseUnixSocketPath(bindAddress);
+        var endpoint = unixSocketPath is null ? ParseEndpoint(bindAddress) : null;
 
         using var index = BinaryIndex.Open(indexPath);
         if (EnvBool("PREFETCH_INDEX", true))
@@ -48,7 +50,16 @@ internal static class KestrelServer
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.AddServerHeader = false;
-            options.Listen(endpoint.Address, endpoint.Port, listenOptions => listenOptions.Protocols = HttpProtocols.Http1);
+            if (unixSocketPath is not null)
+            {
+                TryDeleteUnixSocket(unixSocketPath);
+                options.ListenUnixSocket(unixSocketPath, listenOptions => listenOptions.Protocols = HttpProtocols.Http1);
+            }
+            else
+            {
+                options.Listen(endpoint!.Address, endpoint.Port, listenOptions => listenOptions.Protocols = HttpProtocols.Http1);
+            }
+
             options.Limits.MaxConcurrentConnections = 4096;
             options.Limits.MaxRequestBodySize = Constants.MaxRequestBytes;
             options.Limits.KeepAliveTimeout = TimeSpan.FromSeconds(5);
@@ -58,6 +69,10 @@ internal static class KestrelServer
         });
 
         var app = builder.Build();
+        if (unixSocketPath is not null)
+        {
+            app.Lifetime.ApplicationStarted.Register(static state => EnsureUnixSocketPermissions((string)state!), unixSocketPath);
+        }
 
         Console.Error.WriteLine(
             $"serving on {bindAddress}, server_mode=kestrel, tp_min_threads={minThreads}, index={indexPath}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, exact_fallback={searchParams.ExactFallback}, risky_fallback_refs={index.RiskyFallbackCount}");
@@ -90,8 +105,13 @@ internal static class KestrelServer
         byte[]? rented = null;
         try
         {
+            var reader = context.Request.BodyReader;
             var expectedLength = (int)Math.Clamp(context.Request.ContentLength ?? 0L, 1L, Constants.MaxRequestBytes);
-            var readResult = await context.Request.BodyReader.ReadAtLeastAsync(expectedLength, context.RequestAborted);
+            if (!reader.TryRead(out var readResult) || readResult.Buffer.Length < expectedLength)
+            {
+                readResult = await reader.ReadAtLeastAsync(expectedLength, context.RequestAborted);
+            }
+
             var buffer = readResult.Buffer;
             if (buffer.Length > Constants.MaxRequestBytes)
             {
@@ -112,7 +132,7 @@ internal static class KestrelServer
             }
 
             var responseBody = Classify(body, index, searchParams);
-            context.Request.BodyReader.AdvanceTo(buffer.End);
+            reader.AdvanceTo(buffer.End);
             await WriteJsonAsync(context, responseBody);
         }
         catch
@@ -169,6 +189,45 @@ internal static class KestrelServer
         var port = int.Parse(value[(colon + 1)..]);
         var address = host == "*" ? IPAddress.Any : IPAddress.Parse(host);
         return new IPEndPoint(address, port);
+    }
+
+    private static string? ParseUnixSocketPath(string value)
+    {
+        return value.StartsWith("unix:", StringComparison.OrdinalIgnoreCase) ? value[5..] : null;
+    }
+
+    private static void TryDeleteUnixSocket(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void EnsureUnixSocketPermissions(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite |
+                UnixFileMode.GroupRead | UnixFileMode.GroupWrite |
+                UnixFileMode.OtherRead | UnixFileMode.OtherWrite);
+        }
+        catch
+        {
+        }
     }
 
     private static bool EnvBool(string name, bool fallback)

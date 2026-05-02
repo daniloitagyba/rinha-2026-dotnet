@@ -6,6 +6,7 @@ services:
       - "9999:9999"
     volumes:
       - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - backend-sockets:/sockets
     depends_on:
       - api1
       - api2
@@ -20,7 +21,7 @@ services:
     platform: linux/amd64
     build: .
     environment:
-      BIND_ADDR: 0.0.0.0:8080
+      BIND_ADDR: unix:/sockets/api1.sock
       INDEX_PATH: /app/data/references.idx
       SERVER_MODE: kestrel
       WORKERS: "1"
@@ -30,6 +31,8 @@ services:
       PROFILE_FASTPATH: "1"
       PROFILE_MIN_COUNT: "20"
       EXACT_FALLBACK: "risky"
+    volumes:
+      - backend-sockets:/sockets
     deploy:
       resources:
         limits:
@@ -41,7 +44,7 @@ services:
     platform: linux/amd64
     build: .
     environment:
-      BIND_ADDR: 0.0.0.0:8080
+      BIND_ADDR: unix:/sockets/api2.sock
       INDEX_PATH: /app/data/references.idx
       SERVER_MODE: kestrel
       WORKERS: "1"
@@ -51,8 +54,13 @@ services:
       PROFILE_FASTPATH: "1"
       PROFILE_MIN_COUNT: "20"
       EXACT_FALLBACK: "risky"
+    volumes:
+      - backend-sockets:/sockets
     deploy:
       resources:
         limits:
           cpus: "0.425"
           memory: "156MB"
+
+volumes:
+  backend-sockets:

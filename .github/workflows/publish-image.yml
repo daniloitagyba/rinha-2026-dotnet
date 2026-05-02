@@ -49,7 +49,7 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.IMAGE_NAME }}:fastprofile-selective-c16200-16200-32400-w1
+            ${{ env.IMAGE_NAME }}:fastprofile-selective-c14000-14000-28000-w1
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

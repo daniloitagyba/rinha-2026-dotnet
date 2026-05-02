@@ -23,9 +23,9 @@ services:
       BIND_ADDR: 0.0.0.0:8080
       INDEX_PATH: /app/data/references.idx
       WORKERS: "1"
-      EARLY_CANDIDATES: "16200"
-      MIN_CANDIDATES: "16200"
-      MAX_CANDIDATES: "32400"
+      EARLY_CANDIDATES: "14000"
+      MIN_CANDIDATES: "14000"
+      MAX_CANDIDATES: "28000"
       PROFILE_FASTPATH: "1"
       PROFILE_MIN_COUNT: "20"
       EXACT_FALLBACK: "risky"
@@ -43,9 +43,9 @@ services:
       BIND_ADDR: 0.0.0.0:8080
       INDEX_PATH: /app/data/references.idx
       WORKERS: "1"
-      EARLY_CANDIDATES: "16200"
-      MIN_CANDIDATES: "16200"
-      MAX_CANDIDATES: "32400"
+      EARLY_CANDIDATES: "14000"
+      MIN_CANDIDATES: "14000"
+      MAX_CANDIDATES: "28000"
       PROFILE_FASTPATH: "1"
       PROFILE_MIN_COUNT: "20"
       EXACT_FALLBACK: "risky"

@@ -6,6 +6,7 @@ services:
       - "9999:9999"
     volumes:
       - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - backend-sockets:/sockets
     depends_on:
       - api1
       - api2
@@ -16,10 +17,10 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:kestrel-keepalive2s-c16200-16200-32400-w1
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:kestrel-unixsock-keepalive2s-c16200-16200-32400-w1
     platform: linux/amd64
     environment:
-      BIND_ADDR: 0.0.0.0:8080
+      BIND_ADDR: unix:/sockets/api1.sock
       INDEX_PATH: /app/data/references.idx
       SERVER_MODE: kestrel
       WORKERS: "1"
@@ -29,6 +30,8 @@ services:
       PROFILE_FASTPATH: "1"
       PROFILE_MIN_COUNT: "20"
       EXACT_FALLBACK: "risky"
+    volumes:
+      - backend-sockets:/sockets
     deploy:
       resources:
         limits:
@@ -36,10 +39,10 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:kestrel-keepalive2s-c16200-16200-32400-w1
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:kestrel-unixsock-keepalive2s-c16200-16200-32400-w1
     platform: linux/amd64
     environment:
-      BIND_ADDR: 0.0.0.0:8080
+      BIND_ADDR: unix:/sockets/api2.sock
       INDEX_PATH: /app/data/references.idx
       SERVER_MODE: kestrel
       WORKERS: "1"
@@ -49,8 +52,13 @@ services:
       PROFILE_FASTPATH: "1"
       PROFILE_MIN_COUNT: "20"
       EXACT_FALLBACK: "risky"
+    volumes:
+      - backend-sockets:/sockets
     deploy:
       resources:
         limits:
           cpus: "0.425"
           memory: "156MB"
+
+volumes:
+  backend-sockets:

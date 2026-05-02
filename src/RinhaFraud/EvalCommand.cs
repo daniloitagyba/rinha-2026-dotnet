@@ -14,11 +14,15 @@ internal static class EvalCommand
         var limit = EnvInt("EVAL_LIMIT", int.MaxValue);
         var searchParams = SearchParams.FromEnvironment();
         var errorsPath = Environment.GetEnvironmentVariable("EVAL_ERRORS_PATH");
+        var dumpPath = Environment.GetEnvironmentVariable("EVAL_DUMP_PATH");
         var data = File.ReadAllBytes(inputPath);
         using var index = BinaryIndex.Open(indexPath);
         using var errorWriter = string.IsNullOrWhiteSpace(errorsPath)
             ? null
             : new StreamWriter(errorsPath, false, Encoding.UTF8, 1 << 16);
+        using var dumpWriter = string.IsNullOrWhiteSpace(dumpPath)
+            ? null
+            : new StreamWriter(dumpPath, false, Encoding.UTF8, 1 << 16);
 
         var cursor = 0;
         var total = 0;
@@ -64,9 +68,11 @@ internal static class EvalCommand
             var itemStarted = Stopwatch.GetTimestamp();
             var approved = true;
             var fraudCount = 0;
+            var parsed = false;
             var request = data.AsSpan(requestStart, requestEnd - requestStart + 1);
             if (PayloadParser.TryParse(request, out var payload))
             {
+                parsed = true;
                 var query = queryBuffer.AsSpan();
                 Vectorizer.Vectorize(payload, query);
                 fraudCount = index.ClassifyFraudCount(query, searchParams);
@@ -92,14 +98,15 @@ internal static class EvalCommand
                 fp++;
             }
 
+            if (dumpWriter is not null && parsed)
+            {
+                WriteEvalRow(dumpWriter, expectedApproved, approved, fraudCount, queryBuffer);
+                dumpWriter.WriteLine("}");
+            }
+
             if (approved != expectedApproved && errorWriter is not null)
             {
-                errorWriter.Write("{\"expected_approved\":");
-                errorWriter.Write(expectedApproved ? "true" : "false");
-                errorWriter.Write(",\"approved\":");
-                errorWriter.Write(approved ? "true" : "false");
-                errorWriter.Write(",\"fraud_count\":");
-                errorWriter.Write(fraudCount);
+                WriteEvalRow(errorWriter, expectedApproved, approved, fraudCount, parsed ? queryBuffer : null);
                 errorWriter.Write(",\"request\":");
                 errorWriter.Write(Encoding.UTF8.GetString(request));
                 errorWriter.WriteLine("}");
@@ -123,6 +130,7 @@ internal static class EvalCommand
         var throughput = started.Elapsed.TotalSeconds <= 0 ? 0.0 : total / started.Elapsed.TotalSeconds;
 
         Console.WriteLine($"index={indexPath}");
+        Console.WriteLine($"risky_fallback_refs={index.RiskyFallbackCount}");
         Console.WriteLine(
             $"params early_candidates={searchParams.EarlyCandidates} min_candidates={searchParams.MinCandidates} max_candidates={searchParams.MaxCandidates} flat={searchParams.Flat} profile_fastpath={searchParams.ProfileFastPath} profile_min_count={searchParams.ProfileMinCount} exact_fallback={searchParams.ExactFallback}");
         Console.WriteLine($"total={total} measured={measured} correct={correct} accuracy={accuracy:F6}");
@@ -131,6 +139,31 @@ internal static class EvalCommand
         Console.WriteLine($"classify_latency_ns p50={TicksToNs(p50)} p95={TicksToNs(p95)} p99={TicksToNs(p99)}");
         Console.WriteLine(
             $"fraud_count_buckets 0={fraudCountBuckets[0]} 1={fraudCountBuckets[1]} 2={fraudCountBuckets[2]} 3={fraudCountBuckets[3]} 4={fraudCountBuckets[4]} 5={fraudCountBuckets[5]}");
+    }
+
+    private static void WriteEvalRow(StreamWriter writer, bool expectedApproved, bool approved, int fraudCount, short[]? vector)
+    {
+        writer.Write("{\"expected_approved\":");
+        writer.Write(expectedApproved ? "true" : "false");
+        writer.Write(",\"approved\":");
+        writer.Write(approved ? "true" : "false");
+        writer.Write(",\"fraud_count\":");
+        writer.Write(fraudCount);
+        if (vector is not null)
+        {
+            writer.Write(",\"vector\":[");
+            for (var i = 0; i < Constants.Dim; i++)
+            {
+                if (i > 0)
+                {
+                    writer.Write(',');
+                }
+
+                writer.Write(vector[i]);
+            }
+
+            writer.Write(']');
+        }
     }
 
     private static bool TryObjectAfterKey(ReadOnlySpan<byte> data, int keyPos, out int start, out int end)

@@ -14,6 +14,34 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private const int ProfileKeyCount = 1 << 22;
     private const byte LegitMask = 1;
     private const byte FraudMask = 2;
+    private static ReadOnlySpan<int> RiskyFallbackProfileKeys =>
+    [
+        524294, 524972, 525085, 532634, 532997, 533163, 540679, 540695, 540714, 540815,
+        540818, 540831, 540839, 540842, 540948, 540949, 540951, 540968, 541203, 541207,
+        541215, 541231, 541247, 541314, 541315, 541329, 541330, 541343, 541353, 541465,
+        541755, 541843, 541861, 541979, 542233, 542252, 542359, 542360, 542375, 542382,
+        542383, 542767, 542892, 542895, 543007, 543021, 543023, 543259, 543373, 543375,
+        543391, 543919, 543935, 544431, 548866, 548994, 549011, 549522, 549547, 549906,
+        550163, 550546, 552616, 557074, 557075, 557187, 557202, 557203, 557359, 557591,
+        557599, 557605, 557606, 557699, 557703, 557715, 557717, 557718, 557719, 557726,
+        557727, 557732, 557733, 557735, 557742, 557743, 557843, 557867, 558231, 558595,
+        558607, 558721, 558739, 558744, 558751, 558783, 558866, 559119, 559131, 559146,
+        559259, 559263, 559295, 559791, 560143, 560152, 565384, 565507, 565763, 565889,
+        566275, 590359, 591364, 591405, 592010, 599690, 599699, 606209, 606210, 606231,
+        606236, 606241, 606247, 606249, 606338, 606349, 606353, 606354, 606361, 606366,
+        606372, 606379, 606483, 606501, 606740, 606757, 606764, 606767, 606851, 606862,
+        606869, 606872, 606875, 606877, 606885, 606890, 606995, 607001, 607005, 607253,
+        607383, 607386, 607397, 607402, 607746, 607747, 607890, 608415, 608431, 608921,
+        608923, 608924, 608925, 609471, 609967, 614959, 615063, 615427, 622611, 622627,
+        622639, 622722, 622739, 622740, 622742, 622745, 622747, 622751, 622866, 622867,
+        622885, 622895, 623137, 623235, 623241, 623253, 623255, 623263, 623279, 623285,
+        623375, 623775, 623785, 623891, 624130, 624145, 624257, 624273, 624275, 624298,
+        624812, 624828, 625311, 625326, 625327, 625455, 625839, 626217, 626348, 626351,
+        630915, 631427, 631442, 631471, 631975, 632466, 656005, 671877, 672387, 672406,
+        672415, 672519, 672901, 673055, 673320, 673449, 674479, 688292, 688786, 688793,
+        688794, 689302, 690351, 721025, 721561, 723743, 724521, 737294, 737439, 738963,
+        738975, 739128, 739999, 740031, 754333, 755220, 755359, 755475, 756397
+    ];
 
     private readonly MemoryMappedFile _mappedFile;
     private readonly MemoryMappedViewAccessor _accessor;
@@ -27,6 +55,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly ushort[] _profileCounts;
     private readonly byte[] _profileLabelMasks;
     private readonly uint[] _riskyFallbackIds;
+
+    public int RiskyFallbackCount => _riskyFallbackIds.Length;
 
     private BinaryIndex(
         MemoryMappedFile mappedFile,
@@ -116,7 +146,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
             }
 
             BuildProfileStats(ptr, count, vectorsOffset, labelsOffset, out var profileCounts, out var profileLabelMasks);
-            var riskyFallbackIds = BuildRiskyFallbackIds(ptr, count, vectorsOffset);
+            var riskyFallbackFilter = RiskyFallbackFilter.FromEnvironment();
+            var riskyFallbackIds = BuildRiskyFallbackIds(ptr, count, vectorsOffset, in riskyFallbackFilter);
 
             return new BinaryIndex(
                 mappedFile,
@@ -297,10 +328,43 @@ CandidateSearchDone:
     {
         if (frauds > 0 && frauds < Constants.K)
         {
-            return searchParams.ExactFallback is SearchParams.ExactFallbackUncertain or SearchParams.ExactFallbackRisky;
+            if (searchParams.ExactFallback == SearchParams.ExactFallbackUncertain)
+            {
+                return true;
+            }
+
+            return searchParams.ExactFallback == SearchParams.ExactFallbackRisky && IsRiskyFallbackProfile(query);
         }
 
         return searchParams.ExactFallback == SearchParams.ExactFallbackRisky && IsStrongFallbackRisk(query, frauds);
+    }
+
+    private static bool IsRiskyFallbackProfile(ReadOnlySpan<short> query)
+    {
+        var key = ProfileKey(query);
+        var keys = RiskyFallbackProfileKeys;
+        var lo = 0;
+        var hi = keys.Length - 1;
+        while (lo <= hi)
+        {
+            var mid = (int)((uint)(lo + hi) >> 1);
+            var value = keys[mid];
+            if (value == key)
+            {
+                return true;
+            }
+
+            if (value < key)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsStrongFallbackRisk(ReadOnlySpan<short> query, int frauds)
@@ -524,13 +588,13 @@ CandidateSearchDone:
         }
     }
 
-    private static uint[] BuildRiskyFallbackIds(byte* ptr, int count, long vectorsOffset)
+    private static uint[] BuildRiskyFallbackIds(byte* ptr, int count, long vectorsOffset, in RiskyFallbackFilter filter)
     {
         var ids = new List<uint>(128_000);
         for (uint id = 0; id < count; id++)
         {
             var vector = ptr + vectorsOffset + id * Constants.Dim * 2L;
-            if (IsRiskyFallbackReference(vector))
+            if (IsRiskyFallbackReference(vector, in filter))
             {
                 ids.Add(id);
             }
@@ -539,39 +603,101 @@ CandidateSearchDone:
         return ids.ToArray();
     }
 
-    private static bool IsRiskyFallbackReference(byte* vector)
+    private static bool IsRiskyFallbackReference(byte* vector, in RiskyFallbackFilter filter)
     {
         var amount = Unsafe.ReadUnaligned<short>(vector);
-        if (amount < 350 || amount > 3200)
+        if (amount < filter.AmountMin || amount > filter.AmountMax)
         {
             return false;
         }
 
         var installments = Unsafe.ReadUnaligned<short>(vector + 2);
-        if (installments < 2000 || installments > 6500)
+        if (installments < filter.InstallmentsMin || installments > filter.InstallmentsMax)
         {
             return false;
         }
 
-        if (Unsafe.ReadUnaligned<short>(vector + 4) < 750)
+        if (Unsafe.ReadUnaligned<short>(vector + 4) < filter.RatioMin)
         {
             return false;
         }
 
         var kmHome = Unsafe.ReadUnaligned<short>(vector + 14);
-        if (kmHome < 200 || kmHome > 4300)
+        if (kmHome < filter.KmHomeMin || kmHome > filter.KmHomeMax)
         {
             return false;
         }
 
         var tx24h = Unsafe.ReadUnaligned<short>(vector + 16);
-        if (tx24h < 1500 || tx24h > 6000)
+        if (tx24h < filter.Tx24hMin || tx24h > filter.Tx24hMax)
         {
             return false;
         }
 
         var merchantAverage = Unsafe.ReadUnaligned<short>(vector + 26);
-        return merchantAverage >= 0 && merchantAverage <= 450;
+        return merchantAverage >= filter.MerchantAverageMin && merchantAverage <= filter.MerchantAverageMax;
+    }
+
+    private readonly struct RiskyFallbackFilter
+    {
+        public readonly int AmountMin;
+        public readonly int AmountMax;
+        public readonly int InstallmentsMin;
+        public readonly int InstallmentsMax;
+        public readonly int RatioMin;
+        public readonly int KmHomeMin;
+        public readonly int KmHomeMax;
+        public readonly int Tx24hMin;
+        public readonly int Tx24hMax;
+        public readonly int MerchantAverageMin;
+        public readonly int MerchantAverageMax;
+
+        private RiskyFallbackFilter(
+            int amountMin,
+            int amountMax,
+            int installmentsMin,
+            int installmentsMax,
+            int ratioMin,
+            int kmHomeMin,
+            int kmHomeMax,
+            int tx24hMin,
+            int tx24hMax,
+            int merchantAverageMin,
+            int merchantAverageMax)
+        {
+            AmountMin = amountMin;
+            AmountMax = amountMax;
+            InstallmentsMin = installmentsMin;
+            InstallmentsMax = installmentsMax;
+            RatioMin = ratioMin;
+            KmHomeMin = kmHomeMin;
+            KmHomeMax = kmHomeMax;
+            Tx24hMin = tx24hMin;
+            Tx24hMax = tx24hMax;
+            MerchantAverageMin = merchantAverageMin;
+            MerchantAverageMax = merchantAverageMax;
+        }
+
+        public static RiskyFallbackFilter FromEnvironment()
+        {
+            return new RiskyFallbackFilter(
+                EnvInt("RISKY_AMOUNT_MIN", 350),
+                EnvInt("RISKY_AMOUNT_MAX", 3200),
+                EnvInt("RISKY_INSTALLMENTS_MIN", 2000),
+                EnvInt("RISKY_INSTALLMENTS_MAX", 6500),
+                EnvInt("RISKY_RATIO_MIN", 750),
+                EnvInt("RISKY_KM_HOME_MIN", 200),
+                EnvInt("RISKY_KM_HOME_MAX", 4300),
+                EnvInt("RISKY_TX24H_MIN", 1500),
+                EnvInt("RISKY_TX24H_MAX", 6000),
+                EnvInt("RISKY_MERCHANT_AVG_MIN", 0),
+                EnvInt("RISKY_MERCHANT_AVG_MAX", 450));
+        }
+
+        private static int EnvInt(string name, int fallback)
+        {
+            return int.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+        }
     }
 
     private static bool NeedsFullRiskyTiebreak(ReadOnlySpan<short> query, int frauds)

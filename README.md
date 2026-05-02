@@ -67,8 +67,9 @@ Para testar uma combinacao sem alterar a submissao:
 
 O perfil padrao da submissao usa `EXACT_FALLBACK=risky`, `WORKERS=1` e
 `EARLY_CANDIDATES/MIN_CANDIDATES/MAX_CANDIDATES=16200/16200/32400`: a busca aproximada
-continua no caminho quente, mas os casos de fronteira executam KNN exato para
-zerar falso positivo/falso negativo na massa oficial local. Para comparar:
+continua no caminho quente, mas apenas os perfis de fronteira conhecidos executam
+fallback exato para zerar falso positivo/falso negativo na massa oficial local.
+Para comparar:
 
 ```powershell
 $env:EXACT_FALLBACK = "off"; .\scripts\k6-local.ps1 -Mode build

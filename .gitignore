@@ -5,5 +5,6 @@ resources/references.json.gz
 results/*.json
 test/results*.json
 test/test-data.json
+test/dump*.jsonl
 test/errors*.json
 test/errors*.jsonl

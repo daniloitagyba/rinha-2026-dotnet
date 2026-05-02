@@ -153,14 +153,13 @@ internal static class HttpServer
             var bodyStart = headerEnd + 4;
             var bodyEnd = Math.Min(bodyStart + contentLength, request.Length);
             var body = request[bodyStart..bodyEnd];
-            if (!PayloadParser.TryParse(body, out var payload))
+            Span<short> query = stackalloc short[Constants.Dim];
+            if (!QueryBuilder.TryBuildQuery(body, query))
             {
                 Send(socket, DefaultResponse);
                 return;
             }
 
-            Span<short> query = stackalloc short[Constants.Dim];
-            Vectorizer.Vectorize(payload, query);
             var fraudCount = index.ClassifyFraudCount(query, searchParams);
             SendDecision(socket, fraudCount);
         }

@@ -150,13 +150,12 @@ internal static class KestrelServer
 
     private static ReadOnlyMemory<byte> Classify(ReadOnlySpan<byte> body, BinaryIndex index, SearchParams searchParams)
     {
-        if (!PayloadParser.TryParse(body, out var payload))
+        Span<short> query = stackalloc short[Constants.Dim];
+        if (!QueryBuilder.TryBuildQuery(body, query))
         {
             return DefaultBody;
         }
 
-        Span<short> query = stackalloc short[Constants.Dim];
-        Vectorizer.Vectorize(payload, query);
         var fraudCount = index.ClassifyFraudCount(query, searchParams);
         return fraudCount switch
         {

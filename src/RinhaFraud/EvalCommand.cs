@@ -70,12 +70,10 @@ internal static class EvalCommand
             var fraudCount = 0;
             var parsed = false;
             var request = data.AsSpan(requestStart, requestEnd - requestStart + 1);
-            if (PayloadParser.TryParse(request, out var payload))
+            if (QueryBuilder.TryBuildQuery(request, queryBuffer))
             {
                 parsed = true;
-                var query = queryBuffer.AsSpan();
-                Vectorizer.Vectorize(payload, query);
-                fraudCount = index.ClassifyFraudCount(query, searchParams);
+                fraudCount = index.ClassifyFraudCount(queryBuffer, searchParams);
                 approved = fraudCount < 3;
             }
             else

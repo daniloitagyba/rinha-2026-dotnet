@@ -6,12 +6,47 @@ internal static class Vectorizer
 {
     public static void Vectorize(in Payload payload, Span<short> output)
     {
+        Vectorize(
+            payload.Amount,
+            payload.Installments,
+            payload.RequestedAt,
+            payload.CustomerAvgAmount,
+            payload.TxCount24h,
+            ContainsQuoted(payload.KnownMerchants, payload.MerchantId),
+            payload.Mcc,
+            payload.MerchantAvgAmount,
+            payload.IsOnline,
+            payload.CardPresent,
+            payload.KmFromHome,
+            payload.HasLastTransaction,
+            payload.LastTimestamp,
+            payload.LastKmFromCurrent,
+            output);
+    }
+
+    public static void Vectorize(
+        double amount,
+        double installments,
+        ReadOnlySpan<byte> requestedAt,
+        double customerAvgAmount,
+        double txCount24h,
+        bool knownMerchant,
+        ReadOnlySpan<byte> mcc,
+        double merchantAvgAmount,
+        bool isOnline,
+        bool cardPresent,
+        double kmFromHome,
+        bool hasLastTransaction,
+        ReadOnlySpan<byte> lastTimestamp,
+        double lastKmFromCurrent,
+        Span<short> output)
+    {
         if (output.Length < Constants.Dim)
         {
             throw new ArgumentException("output span is too small", nameof(output));
         }
 
-        if (!TryParseTime(payload.RequestedAt, out var year, out var month, out var day, out var hour, out var minute))
+        if (!TryParseTime(requestedAt, out var year, out var month, out var day, out var hour, out var minute))
         {
             year = 2026;
             month = 1;
@@ -22,21 +57,21 @@ internal static class Vectorizer
 
         var dayOfWeek = DayOfWeek(year, month, day);
 
-        output[0] = Quantize(Clamp01(payload.Amount / 10_000.0));
-        output[1] = Quantize(Clamp01(payload.Installments / 12.0));
-        output[2] = Quantize(Clamp01(AmountVsAverage(payload.Amount, payload.CustomerAvgAmount)));
+        output[0] = Quantize(Clamp01(amount / 10_000.0));
+        output[1] = Quantize(Clamp01(installments / 12.0));
+        output[2] = Quantize(Clamp01(AmountVsAverage(amount, customerAvgAmount)));
         output[3] = Quantize(hour / 23.0);
         output[4] = Quantize(dayOfWeek / 6.0);
 
-        if (payload.HasLastTransaction)
+        if (hasLastTransaction)
         {
             var current = EpochMinutes(year, month, day, hour, minute);
-            var last = TryParseTime(payload.LastTimestamp, out var ly, out var lm, out var ld, out var lh, out var lmin)
+            var last = TryParseTime(lastTimestamp, out var ly, out var lm, out var ld, out var lh, out var lmin)
                 ? EpochMinutes(ly, lm, ld, lh, lmin)
                 : current;
             var minutesSinceLast = Math.Max(0, current - last);
             output[5] = Quantize(Clamp01(minutesSinceLast / 1440.0));
-            output[6] = Quantize(Clamp01(payload.LastKmFromCurrent / 1000.0));
+            output[6] = Quantize(Clamp01(lastKmFromCurrent / 1000.0));
         }
         else
         {
@@ -44,13 +79,13 @@ internal static class Vectorizer
             output[6] = -Constants.Scale;
         }
 
-        output[7] = Quantize(Clamp01(payload.KmFromHome / 1000.0));
-        output[8] = Quantize(Clamp01(payload.TxCount24h / 20.0));
-        output[9] = payload.IsOnline ? (short)Constants.Scale : (short)0;
-        output[10] = payload.CardPresent ? (short)Constants.Scale : (short)0;
-        output[11] = ContainsQuoted(payload.KnownMerchants, payload.MerchantId) ? (short)0 : (short)Constants.Scale;
-        output[12] = Quantize(MccRisk(payload.Mcc));
-        output[13] = Quantize(Clamp01(payload.MerchantAvgAmount / 10_000.0));
+        output[7] = Quantize(Clamp01(kmFromHome / 1000.0));
+        output[8] = Quantize(Clamp01(txCount24h / 20.0));
+        output[9] = isOnline ? (short)Constants.Scale : (short)0;
+        output[10] = cardPresent ? (short)Constants.Scale : (short)0;
+        output[11] = knownMerchant ? (short)0 : (short)Constants.Scale;
+        output[12] = Quantize(MccRisk(mcc));
+        output[13] = Quantize(Clamp01(merchantAvgAmount / 10_000.0));
     }
 
     public static short QuantizeReference(double value)

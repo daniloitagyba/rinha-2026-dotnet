@@ -10,6 +10,7 @@ internal static class SelfTest
     {
         TestVectorizationWithoutLastTransaction();
         TestVectorizationFraudShape();
+        TestQueryBuilderMatchesLegacyPath();
         TestBuildIndexAndClassifyExamples();
         Console.WriteLine("self-test ok");
     }
@@ -90,6 +91,31 @@ internal static class SelfTest
             }
             catch
             {
+            }
+        }
+    }
+
+    private static void TestQueryBuilderMatchesLegacyPath()
+    {
+        AssertQueryBuilderMatchesLegacy(LegitPayload, "legit payload");
+        AssertQueryBuilderMatchesLegacy(FraudPayload, "fraud payload");
+    }
+
+    private static void AssertQueryBuilderMatchesLegacy(string json, string name)
+    {
+        var body = Encoding.UTF8.GetBytes(json);
+        Assert(PayloadParser.TryParse(body, out var payload), $"{name} should parse on legacy path");
+
+        Span<short> legacy = stackalloc short[Constants.Dim];
+        Span<short> optimized = stackalloc short[Constants.Dim];
+        Vectorizer.Vectorize(payload, legacy);
+        Assert(QueryBuilder.TryBuildQuery(body, optimized), $"{name} should build optimized query");
+
+        for (var i = 0; i < Constants.Dim; i++)
+        {
+            if (legacy[i] != optimized[i])
+            {
+                throw new InvalidOperationException($"{name}: query mismatch at dim {i}, legacy={legacy[i]}, optimized={optimized[i]}");
             }
         }
     }

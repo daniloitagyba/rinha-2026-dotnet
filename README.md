@@ -65,6 +65,20 @@ Para testar uma combinacao sem alterar a submissao:
 .\scripts\k6-local.ps1 -EarlyCandidates 18000 -MinCandidates 18000 -MaxCandidates 36000 -Workers 1
 ```
 
+No Windows com Ryzen, o preset abaixo aproxima melhor o ambiente remoto oficial,
+porque desacelera apenas o balanceador local, que era o principal desvio entre o
+resultado local bruto e o remoto:
+
+```powershell
+.\scripts\k6-local.ps1 -RunnerPreset remote-ryzen
+```
+
+No Linux/WSL:
+
+```sh
+RUNNER_PRESET=remote-ryzen sh scripts/k6-local.sh
+```
+
 O perfil padrao da submissao usa `EXACT_FALLBACK=risky`, `WORKERS=1` e
 `EARLY_CANDIDATES/MIN_CANDIDATES/MAX_CANDIDATES=16200/16200/32400`: a busca aproximada
 continua no caminho quente, mas apenas os perfis de fronteira conhecidos executam

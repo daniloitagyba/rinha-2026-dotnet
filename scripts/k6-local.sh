@@ -3,12 +3,25 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 MODE="${MODE:-submission}"
+RUNNER_PRESET="${RUNNER_PRESET:-default}"
 PROJECT_NAME="${PROJECT_NAME:-rinha-local}"
 K6_IMAGE="${K6_IMAGE:-grafana/k6:latest}"
 KEEP_SERVICES="${KEEP_SERVICES:-0}"
 REFRESH_DATA="${REFRESH_DATA:-0}"
 PULL="${PULL:-0}"
 OVERRIDE_FILE=""
+
+case "$RUNNER_PRESET" in
+  default)
+    ;;
+  remote-ryzen)
+    : "${LB_CPU:=0.12}"
+    ;;
+  *)
+    echo "RUNNER_PRESET must be default or remote-ryzen" >&2
+    exit 2
+    ;;
+esac
 
 if [ "$MODE" = "submission" ]; then
   COMPOSE_FILE="$ROOT/submission/docker-compose.yml"
@@ -48,10 +61,27 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${PROFILE_FASTPATH:-}" ] || \
    [ -n "${PROFILE_MIN_COUNT:-}" ] || \
    [ -n "${EXACT_FALLBACK:-}" ] || \
-   [ -n "${WORKERS:-}" ]; then
+   [ -n "${WORKERS:-}" ] || \
+   [ -n "${SERVER_MODE:-}" ] || \
+   [ -n "${TP_MIN_THREADS:-}" ] || \
+   [ -n "${KEEP_ALIVE_REQUESTS:-}" ] || \
+   [ -n "${KEEP_ALIVE_IDLE_MS:-}" ] || \
+   [ -n "${API_CPU:-}" ] || \
+   [ -n "${API_MEMORY:-}" ] || \
+   [ -n "${LB_CPU:-}" ] || \
+   [ -n "${LB_MEMORY:-}" ]; then
   OVERRIDE_FILE="${TMPDIR:-/tmp}/${PROJECT_NAME}.override.yml"
   {
     echo "services:"
+    if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ]; then
+      echo "  lb:"
+      echo "    deploy:"
+      echo "      resources:"
+      echo "        limits:"
+      [ -n "${LB_CPU:-}" ] && echo "          cpus: \"$LB_CPU\""
+      [ -n "${LB_MEMORY:-}" ] && echo "          memory: \"$LB_MEMORY\""
+    fi
+
     for service in api1 api2; do
       echo "  $service:"
       echo "    environment:"
@@ -62,6 +92,18 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${PROFILE_MIN_COUNT:-}" ] && echo "      PROFILE_MIN_COUNT: \"$PROFILE_MIN_COUNT\""
       [ -n "${EXACT_FALLBACK:-}" ] && echo "      EXACT_FALLBACK: \"$EXACT_FALLBACK\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
+      [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""
+      [ -n "${TP_MIN_THREADS:-}" ] && echo "      TP_MIN_THREADS: \"$TP_MIN_THREADS\""
+      [ -n "${KEEP_ALIVE_REQUESTS:-}" ] && echo "      KEEP_ALIVE_REQUESTS: \"$KEEP_ALIVE_REQUESTS\""
+      [ -n "${KEEP_ALIVE_IDLE_MS:-}" ] && echo "      KEEP_ALIVE_IDLE_MS: \"$KEEP_ALIVE_IDLE_MS\""
+
+      if [ -n "${API_CPU:-}" ] || [ -n "${API_MEMORY:-}" ]; then
+        echo "    deploy:"
+        echo "      resources:"
+        echo "        limits:"
+        [ -n "${API_CPU:-}" ] && echo "          cpus: \"$API_CPU\""
+        [ -n "${API_MEMORY:-}" ] && echo "          memory: \"$API_MEMORY\""
+      fi
     done
   } > "$OVERRIDE_FILE"
 fi

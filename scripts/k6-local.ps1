@@ -1,6 +1,8 @@
 param(
     [ValidateSet("submission", "build")]
     [string]$Mode = "submission",
+    [ValidateSet("default", "remote-ryzen")]
+    [string]$RunnerPreset = "default",
     [string]$ProjectName = "rinha-local",
     [string]$K6Image = $env:K6_IMAGE,
     [string]$EarlyCandidates = $env:EARLY_CANDIDATES,
@@ -14,6 +16,10 @@ param(
     [string]$ThreadPoolMinThreads = $env:TP_MIN_THREADS,
     [string]$KeepAliveRequests = $env:KEEP_ALIVE_REQUESTS,
     [string]$KeepAliveIdleMs = $env:KEEP_ALIVE_IDLE_MS,
+    [string]$ApiCpu = $env:API_CPU,
+    [string]$ApiMemory = $env:API_MEMORY,
+    [string]$LbCpu = $env:LB_CPU,
+    [string]$LbMemory = $env:LB_MEMORY,
     [switch]$KeepServices,
     [switch]$RefreshData,
     [switch]$Pull
@@ -23,6 +29,14 @@ $ErrorActionPreference = "Stop"
 
 if ([string]::IsNullOrWhiteSpace($K6Image)) {
     $K6Image = "grafana/k6:latest"
+}
+
+switch ($RunnerPreset) {
+    "remote-ryzen" {
+        if ([string]::IsNullOrWhiteSpace($LbCpu)) {
+            $LbCpu = "0.12"
+        }
+    }
 }
 
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -61,14 +75,47 @@ foreach ($item in $apiOverrides.GetEnumerator()) {
     }
 }
 
-if ($activeApiOverrides.Count -gt 0) {
+$hasResourceOverrides =
+    -not [string]::IsNullOrWhiteSpace($ApiCpu) -or
+    -not [string]::IsNullOrWhiteSpace($ApiMemory) -or
+    -not [string]::IsNullOrWhiteSpace($LbCpu) -or
+    -not [string]::IsNullOrWhiteSpace($LbMemory)
+
+if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides) {
     $overrideFile = Join-Path ([System.IO.Path]::GetTempPath()) "$ProjectName.override.yml"
     $lines = @("services:")
+    if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory)) {
+        $lines += "  lb:"
+        $lines += "    deploy:"
+        $lines += "      resources:"
+        $lines += "        limits:"
+        if (-not [string]::IsNullOrWhiteSpace($LbCpu)) {
+            $lines += "          cpus: `"$LbCpu`""
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($LbMemory)) {
+            $lines += "          memory: `"$LbMemory`""
+        }
+    }
+
     foreach ($service in @("api1", "api2")) {
         $lines += "  ${service}:"
         $lines += "    environment:"
         foreach ($item in $activeApiOverrides) {
             $lines += "      $($item.Key): `"$($item.Value)`""
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($ApiCpu) -or -not [string]::IsNullOrWhiteSpace($ApiMemory)) {
+            $lines += "    deploy:"
+            $lines += "      resources:"
+            $lines += "        limits:"
+            if (-not [string]::IsNullOrWhiteSpace($ApiCpu)) {
+                $lines += "          cpus: `"$ApiCpu`""
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($ApiMemory)) {
+                $lines += "          memory: `"$ApiMemory`""
+            }
         }
     }
 

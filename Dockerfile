@@ -1,9 +1,6 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS builder
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble-aot AS builder
 
 WORKDIR /src
-RUN apt-get update -o Acquire::Retries=3 \
-    && apt-get install -y --no-install-recommends clang zlib1g-dev gzip ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 

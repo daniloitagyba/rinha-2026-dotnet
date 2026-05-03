@@ -13,11 +13,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
+          cpus: "0.20"
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:kestrel-unixsock-keepalive2s-c16200-16200-32400-w1
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:c936ea8fc6720130c0bf3be4e5039f6f2a24aa62
     platform: linux/amd64
     environment:
       BIND_ADDR: unix:/sockets/api1.sock
@@ -35,11 +35,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.425"
+          cpus: "0.40"
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:kestrel-unixsock-keepalive2s-c16200-16200-32400-w1
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:c936ea8fc6720130c0bf3be4e5039f6f2a24aa62
     platform: linux/amd64
     environment:
       BIND_ADDR: unix:/sockets/api2.sock
@@ -57,7 +57,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.425"
+          cpus: "0.40"
           memory: "156MB"
 
 volumes:

@@ -64,6 +64,9 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
    [ -n "${SERVER_MODE:-}" ] || \
    [ -n "${TP_MIN_THREADS:-}" ] || \
+   [ -n "${SOCKET_IO_QUEUES:-}" ] || \
+   [ -n "${SOCKET_INLINE_SCHEDULING:-}" ] || \
+   [ -n "${SOCKET_WAIT_FOR_DATA:-}" ] || \
    [ -n "${KEEP_ALIVE_REQUESTS:-}" ] || \
    [ -n "${KEEP_ALIVE_IDLE_MS:-}" ] || \
    [ -n "${API_CPU:-}" ] || \
@@ -94,6 +97,9 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
       [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""
       [ -n "${TP_MIN_THREADS:-}" ] && echo "      TP_MIN_THREADS: \"$TP_MIN_THREADS\""
+      [ -n "${SOCKET_IO_QUEUES:-}" ] && echo "      SOCKET_IO_QUEUES: \"$SOCKET_IO_QUEUES\""
+      [ -n "${SOCKET_INLINE_SCHEDULING:-}" ] && echo "      SOCKET_INLINE_SCHEDULING: \"$SOCKET_INLINE_SCHEDULING\""
+      [ -n "${SOCKET_WAIT_FOR_DATA:-}" ] && echo "      SOCKET_WAIT_FOR_DATA: \"$SOCKET_WAIT_FOR_DATA\""
       [ -n "${KEEP_ALIVE_REQUESTS:-}" ] && echo "      KEEP_ALIVE_REQUESTS: \"$KEEP_ALIVE_REQUESTS\""
       [ -n "${KEEP_ALIVE_IDLE_MS:-}" ] && echo "      KEEP_ALIVE_IDLE_MS: \"$KEEP_ALIVE_IDLE_MS\""
 

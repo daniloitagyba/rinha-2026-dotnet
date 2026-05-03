@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
 using Microsoft.Extensions.Logging;
 
 internal static class KestrelServer
@@ -30,6 +31,9 @@ internal static class KestrelServer
         var indexPath = Environment.GetEnvironmentVariable("INDEX_PATH") ?? "/app/data/references.idx";
         var searchParams = SearchParams.FromEnvironment();
         var minThreads = EnvInt("TP_MIN_THREADS", 0);
+        var socketIoQueues = EnvInt("SOCKET_IO_QUEUES", 0);
+        var socketWaitForData = EnvNullableBool("SOCKET_WAIT_FOR_DATA");
+        var socketInlineScheduling = EnvNullableBool("SOCKET_INLINE_SCHEDULING");
         var unixSocketPath = ParseUnixSocketPath(bindAddress);
         var endpoint = unixSocketPath is null ? ParseEndpoint(bindAddress) : null;
 
@@ -47,6 +51,23 @@ internal static class KestrelServer
 
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
+        builder.WebHost.UseSockets(options =>
+        {
+            if (socketIoQueues > 0)
+            {
+                options.IOQueueCount = socketIoQueues;
+            }
+
+            if (socketWaitForData is bool waitForData)
+            {
+                options.WaitForDataBeforeAllocatingBuffer = waitForData;
+            }
+
+            if (socketInlineScheduling is bool inlineScheduling)
+            {
+                options.UnsafePreferInlineScheduling = inlineScheduling;
+            }
+        });
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.AddServerHeader = false;
@@ -75,7 +96,7 @@ internal static class KestrelServer
         }
 
         Console.Error.WriteLine(
-            $"serving on {bindAddress}, server_mode=kestrel, tp_min_threads={minThreads}, index={indexPath}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, exact_fallback={searchParams.ExactFallback}, risky_fallback_refs={index.RiskyFallbackCount}");
+            $"serving on {bindAddress}, server_mode=kestrel, tp_min_threads={minThreads}, socket_io_queues={socketIoQueues}, socket_wait_for_data={(socketWaitForData.HasValue ? socketWaitForData.Value : "default")}, socket_inline_scheduling={(socketInlineScheduling.HasValue ? socketInlineScheduling.Value : "default")}, index={indexPath}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, exact_fallback={searchParams.ExactFallback}, risky_fallback_refs={index.RiskyFallbackCount}");
 
         app.Run(context => HandleRequestAsync(context, index, searchParams));
 
@@ -238,5 +259,16 @@ internal static class KestrelServer
     private static int EnvInt(string name, int fallback)
     {
         return int.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+    }
+
+    private static bool? EnvNullableBool(string name)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return value switch
+        {
+            "1" or "true" or "TRUE" or "yes" or "YES" => true,
+            "0" or "false" or "FALSE" or "no" or "NO" => false,
+            _ => null
+        };
     }
 }

@@ -24,6 +24,9 @@ services:
       BIND_ADDR: unix:/sockets/api1.sock
       INDEX_PATH: /app/data/references.idx
       SERVER_MODE: kestrel
+      SOCKET_IO_QUEUES: "1"
+      SOCKET_INLINE_SCHEDULING: "1"
+      SOCKET_WAIT_FOR_DATA: "0"
       WORKERS: "1"
       EARLY_CANDIDATES: "16200"
       MIN_CANDIDATES: "16200"
@@ -47,6 +50,9 @@ services:
       BIND_ADDR: unix:/sockets/api2.sock
       INDEX_PATH: /app/data/references.idx
       SERVER_MODE: kestrel
+      SOCKET_IO_QUEUES: "1"
+      SOCKET_INLINE_SCHEDULING: "1"
+      SOCKET_WAIT_FOR_DATA: "0"
       WORKERS: "1"
       EARLY_CANDIDATES: "16200"
       MIN_CANDIDATES: "16200"

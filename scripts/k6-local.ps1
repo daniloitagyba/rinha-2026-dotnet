@@ -36,9 +36,6 @@ if ([string]::IsNullOrWhiteSpace($K6Image)) {
 
 switch ($RunnerPreset) {
     "remote-ryzen" {
-        if ([string]::IsNullOrWhiteSpace($LbCpu)) {
-            $LbCpu = "0.12"
-        }
     }
 }
 

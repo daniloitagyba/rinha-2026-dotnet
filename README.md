@@ -65,9 +65,11 @@ Para testar uma combinacao sem alterar a submissao:
 .\scripts\k6-local.ps1 -EarlyCandidates 18000 -MinCandidates 18000 -MaxCandidates 36000 -Workers 1
 ```
 
-No Windows com Ryzen, o preset abaixo aproxima melhor o ambiente remoto oficial,
-porque desacelera apenas o balanceador local, que era o principal desvio entre o
-resultado local bruto e o remoto:
+No Windows com Ryzen, use primeiro o `-Mode submission` puro. Depois da troca
+para TCP mode, os overrides de CPU do Docker Desktop ficaram pouco previsiveis
+nesta maquina: eles servem para exploracao, mas nao reproduzem o remoto oficial
+de forma estavel. O preset abaixo ficou apenas como atalho para esse modo de
+comparacao local:
 
 ```powershell
 .\scripts\k6-local.ps1 -RunnerPreset remote-ryzen

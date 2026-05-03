@@ -17,12 +17,15 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:kestrel-unixsock-keepalive2s-c16200-16200-32400-w1
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:765ca17f4f21ffead5afd35e2ee9bd808356e97e
     platform: linux/amd64
     environment:
       BIND_ADDR: unix:/sockets/api1.sock
       INDEX_PATH: /app/data/references.idx
       SERVER_MODE: kestrel
+      SOCKET_IO_QUEUES: "1"
+      SOCKET_INLINE_SCHEDULING: "1"
+      SOCKET_WAIT_FOR_DATA: "0"
       WORKERS: "1"
       EARLY_CANDIDATES: "16200"
       MIN_CANDIDATES: "16200"
@@ -39,12 +42,15 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:kestrel-unixsock-keepalive2s-c16200-16200-32400-w1
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:765ca17f4f21ffead5afd35e2ee9bd808356e97e
     platform: linux/amd64
     environment:
       BIND_ADDR: unix:/sockets/api2.sock
       INDEX_PATH: /app/data/references.idx
       SERVER_MODE: kestrel
+      SOCKET_IO_QUEUES: "1"
+      SOCKET_INLINE_SCHEDULING: "1"
+      SOCKET_WAIT_FOR_DATA: "0"
       WORKERS: "1"
       EARLY_CANDIDATES: "16200"
       MIN_CANDIDATES: "16200"

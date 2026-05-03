@@ -15,7 +15,6 @@ case "$RUNNER_PRESET" in
   default)
     ;;
   remote-ryzen)
-    : "${LB_CPU:=0.12}"
     ;;
   *)
     echo "RUNNER_PRESET must be default or remote-ryzen" >&2

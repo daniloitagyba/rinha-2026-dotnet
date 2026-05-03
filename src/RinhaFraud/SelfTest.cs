@@ -11,6 +11,7 @@ internal static class SelfTest
         TestVectorizationWithoutLastTransaction();
         TestVectorizationFraudShape();
         TestQueryBuilderMatchesLegacyPath();
+        TestPrecomputedNeighborKeysMatchDynamic();
         TestBuildIndexAndClassifyExamples();
         Console.WriteLine("self-test ok");
     }
@@ -69,6 +70,8 @@ internal static class SelfTest
                 flat: false,
                 profileFastPath: false,
                 profileMinCount: 20,
+                profileLegitMinCount: 20,
+                profileFraudMinCount: 20,
                 exactFallback: SearchParams.ExactFallbackOff);
 
             Span<short> legitVector = stackalloc short[Constants.Dim];
@@ -99,6 +102,36 @@ internal static class SelfTest
     {
         AssertQueryBuilderMatchesLegacy(LegitPayload, "legit payload");
         AssertQueryBuilderMatchesLegacy(FraudPayload, "fraud payload");
+    }
+
+    private static void TestPrecomputedNeighborKeysMatchDynamic()
+    {
+        Span<ushort> dynamic = stackalloc ushort[Constants.BucketCount];
+        Span<byte> seen = stackalloc byte[Constants.BucketCount];
+        Span<short> query = stackalloc short[Constants.Dim];
+
+        for (var bucketKey = 0; bucketKey < Constants.BucketCount; bucketKey++)
+        {
+            query.Clear();
+            query[0] = ValueForBucket8(bucketKey & 7);
+            query[2] = ValueForBucket8((bucketKey >> 3) & 7);
+            query[7] = ValueForBucket8((bucketKey >> 6) & 7);
+            query[3] = ValueForBucket4((bucketKey >> 9) & 3);
+            query[5] = ((bucketKey >> 11) & 1) == 0 ? (short)0 : (short)-Constants.Scale;
+
+            var count = Vectorizer.NeighborKeys(query, dynamic, seen);
+            Assert(count == Constants.BucketCount, $"neighbor order should cover all buckets for key {bucketKey}");
+
+            var precomputed = Vectorizer.NeighborKeyOrderForBucketKey(bucketKey);
+            for (var i = 0; i < Constants.BucketCount; i++)
+            {
+                if (dynamic[i] != precomputed[i])
+                {
+                    throw new InvalidOperationException(
+                        $"neighbor order mismatch for key {bucketKey} at index {i}, dynamic={dynamic[i]}, precomputed={precomputed[i]}");
+                }
+            }
+        }
     }
 
     private static void AssertQueryBuilderMatchesLegacy(string json, string name)
@@ -134,6 +167,16 @@ internal static class SelfTest
         {
             throw new InvalidOperationException($"{name}: expected {expected}, got {actual}");
         }
+    }
+
+    private static short ValueForBucket8(int bucket)
+    {
+        return bucket == 0 ? (short)0 : (short)(((Constants.Scale + 1) * bucket + 7) / 8);
+    }
+
+    private static short ValueForBucket4(int bucket)
+    {
+        return bucket == 0 ? (short)0 : (short)(((Constants.Scale + 1) * bucket + 3) / 4);
     }
 
     private const string LegitPayload = """

@@ -59,6 +59,8 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${MAX_CANDIDATES:-}" ] || \
    [ -n "${PROFILE_FASTPATH:-}" ] || \
    [ -n "${PROFILE_MIN_COUNT:-}" ] || \
+   [ -n "${PROFILE_LEGIT_MIN_COUNT:-}" ] || \
+   [ -n "${PROFILE_FRAUD_MIN_COUNT:-}" ] || \
    [ -n "${EXACT_FALLBACK:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
    [ -n "${SERVER_MODE:-}" ] || \
@@ -92,6 +94,8 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${MAX_CANDIDATES:-}" ] && echo "      MAX_CANDIDATES: \"$MAX_CANDIDATES\""
       [ -n "${PROFILE_FASTPATH:-}" ] && echo "      PROFILE_FASTPATH: \"$PROFILE_FASTPATH\""
       [ -n "${PROFILE_MIN_COUNT:-}" ] && echo "      PROFILE_MIN_COUNT: \"$PROFILE_MIN_COUNT\""
+      [ -n "${PROFILE_LEGIT_MIN_COUNT:-}" ] && echo "      PROFILE_LEGIT_MIN_COUNT: \"$PROFILE_LEGIT_MIN_COUNT\""
+      [ -n "${PROFILE_FRAUD_MIN_COUNT:-}" ] && echo "      PROFILE_FRAUD_MIN_COUNT: \"$PROFILE_FRAUD_MIN_COUNT\""
       [ -n "${EXACT_FALLBACK:-}" ] && echo "      EXACT_FALLBACK: \"$EXACT_FALLBACK\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
       [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""

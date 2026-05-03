@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 internal unsafe sealed class BinaryIndex : IDisposable
 {
@@ -202,6 +203,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         return checksum;
     }
 
+    [SkipLocalsInit]
     public int ClassifyFraudCount(ReadOnlySpan<short> query, in SearchParams searchParams)
     {
         if (TryProfileFastDecision(query, searchParams, out var fastFraudCount))
@@ -218,62 +220,32 @@ internal unsafe sealed class BinaryIndex : IDisposable
         Span<byte> topLabel = stackalloc byte[Constants.K];
         topDist.Fill(long.MaxValue);
 
-        Span<byte> seen = stackalloc byte[Constants.BucketCount];
-        seen.Clear();
         var candidates = 0;
-        var amount = Vectorizer.Bucket8(query[0]);
-        var ratio = Vectorizer.Bucket8(query[2]);
-        var kmHome = Vectorizer.Bucket8(query[7]);
-        var hour = Vectorizer.Bucket4(query[3]);
-        var noLast = query[5] < 0 ? 1 : 0;
-
-        for (var radius = 0; radius < 8; radius++)
+        var neighborKeys = Vectorizer.NeighborKeyOrderFor(query);
+        for (var neighborIndex = 0; neighborIndex < neighborKeys.Length; neighborIndex++)
         {
-            for (var a = Math.Max(amount - radius, 0); a <= Math.Min(amount + radius, 7); a++)
+            var key = neighborKeys[neighborIndex];
+            var start = BucketOffset(key);
+            var end = BucketOffset(key + 1);
+            for (var itemPos = start; itemPos < end; itemPos++)
             {
-                for (var r = Math.Max(ratio - radius, 0); r <= Math.Min(ratio + radius, 7); r++)
+                var id = BucketItem(itemPos);
+                Consider(id, query, topDist, topLabel);
+                candidates++;
+                if (candidates >= searchParams.MaxCandidates)
                 {
-                    for (var k = Math.Max(kmHome - radius, 0); k <= Math.Min(kmHome + radius, 7); k++)
-                    {
-                        for (var h = Math.Max(hour - radius, 0); h <= Math.Min(hour + radius, 3); h++)
-                        {
-                            var lastStart = radius >= 2 ? 0 : noLast;
-                            var lastEnd = radius >= 2 ? 1 : noLast;
-                            for (var last = lastStart; last <= lastEnd; last++)
-                            {
-                                var key = a | (r << 3) | (k << 6) | (h << 9) | (last << 11);
-                                if (seen[key] != 0)
-                                {
-                                    continue;
-                                }
-
-                                seen[key] = 1;
-                                var start = BucketOffset(key);
-                                var end = BucketOffset(key + 1);
-                                for (var itemPos = start; itemPos < end; itemPos++)
-                                {
-                                    var id = BucketItem(itemPos);
-                                    Consider(id, query, topDist, topLabel);
-                                    candidates++;
-                                    if (candidates >= searchParams.MaxCandidates)
-                                    {
-                                        goto CandidateSearchDone;
-                                    }
-                                }
-
-                                if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel))
-                                {
-                                    goto CandidateSearchDone;
-                                }
-
-                                if (candidates >= searchParams.MinCandidates)
-                                {
-                                    goto CandidateSearchDone;
-                                }
-                            }
-                        }
-                    }
+                    goto CandidateSearchDone;
                 }
+            }
+
+            if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel))
+            {
+                goto CandidateSearchDone;
+            }
+
+            if (candidates >= searchParams.MinCandidates)
+            {
+                goto CandidateSearchDone;
             }
         }
 
@@ -300,6 +272,7 @@ CandidateSearchDone:
             : ClassifyFlat(query);
     }
 
+    [SkipLocalsInit]
     private int ClassifyFlat(ReadOnlySpan<short> query)
     {
         Span<long> topDist = stackalloc long[Constants.K];
@@ -314,6 +287,7 @@ CandidateSearchDone:
         return CountFrauds(topLabel);
     }
 
+    [SkipLocalsInit]
     private int ClassifyRiskyFlat(ReadOnlySpan<short> query, bool allowFullTiebreak)
     {
         if (_riskyFallbackIds.Length < Constants.K)
@@ -334,6 +308,7 @@ CandidateSearchDone:
         return allowFullTiebreak && NeedsFullRiskyTiebreak(query, frauds) ? ClassifyFlat(query) : frauds;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int CountFrauds(ReadOnlySpan<byte> topLabel)
     {
         var frauds = 0;
@@ -348,6 +323,7 @@ CandidateSearchDone:
         return frauds;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool ShouldUseExactFallback(ReadOnlySpan<short> query, int frauds, in SearchParams searchParams)
     {
         if (frauds > 0 && frauds < Constants.K)
@@ -369,6 +345,7 @@ CandidateSearchDone:
         return ContainsSorted(RiskyFallbackProfileKeys, key);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool TryRiskyDirectDecision(ReadOnlySpan<short> query, int frauds, out int directFrauds)
     {
         directFrauds = frauds;
@@ -393,6 +370,7 @@ CandidateSearchDone:
         return false;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool ContainsSorted(ReadOnlySpan<int> values, int needle)
     {
         var lo = 0;
@@ -502,6 +480,7 @@ CandidateSearchDone:
                query[8] >= 2500 && query[8] <= 3500;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool StrongDecision(ReadOnlySpan<byte> topLabel)
     {
         var frauds = 0;
@@ -510,9 +489,10 @@ CandidateSearchDone:
             frauds += topLabel[i];
         }
 
-        return frauds <= 1 || frauds >= 4;
+        return frauds == 0 || frauds == Constants.K;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool TryProfileFastDecision(ReadOnlySpan<short> query, in SearchParams searchParams, out int fraudCount)
     {
         fraudCount = 0;
@@ -522,20 +502,25 @@ CandidateSearchDone:
         }
 
         var key = ProfileKey(query);
-        if (_profileCounts[key] < searchParams.ProfileMinCount)
-        {
-            return false;
-        }
-
         var mask = _profileLabelMasks[key];
         if (mask == LegitMask)
         {
+            if (_profileCounts[key] < searchParams.ProfileLegitMinCount)
+            {
+                return false;
+            }
+
             fraudCount = 0;
             return true;
         }
 
         if (mask == FraudMask)
         {
+            if (_profileCounts[key] < searchParams.ProfileFraudMinCount)
+            {
+                return false;
+            }
+
             fraudCount = Constants.K;
             return true;
         }
@@ -543,6 +528,7 @@ CandidateSearchDone:
         return false;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Consider(uint id, ReadOnlySpan<short> query, Span<long> topDist, Span<byte> topLabel)
     {
         var dist = DistanceSquared(id, query, topDist[Constants.K - 1]);
@@ -603,76 +589,80 @@ CandidateSearchDone:
     private long DistanceSquared(uint id, ReadOnlySpan<short> query, long cutoff)
     {
         var vector = _ptr + _vectorsOffset + id * Constants.Dim * 2L;
+        ref var q = ref MemoryMarshal.GetReference(query);
         long sum = 0;
 
-        var d = (long)query[6] - Unsafe.ReadUnaligned<short>(vector + 12);
+        var d = (long)Unsafe.Add(ref q, 6) - Unsafe.ReadUnaligned<short>(vector + 12);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[10] - Unsafe.ReadUnaligned<short>(vector + 20);
+        d = (long)Unsafe.Add(ref q, 10) - Unsafe.ReadUnaligned<short>(vector + 20);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[9] - Unsafe.ReadUnaligned<short>(vector + 18);
+        d = (long)Unsafe.Add(ref q, 9) - Unsafe.ReadUnaligned<short>(vector + 18);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[5] - Unsafe.ReadUnaligned<short>(vector + 10);
+        d = (long)Unsafe.Add(ref q, 5) - Unsafe.ReadUnaligned<short>(vector + 10);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[11] - Unsafe.ReadUnaligned<short>(vector + 22);
+        d = (long)Unsafe.Add(ref q, 11) - Unsafe.ReadUnaligned<short>(vector + 22);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[2] - Unsafe.ReadUnaligned<short>(vector + 4);
+        d = (long)Unsafe.Add(ref q, 2) - Unsafe.ReadUnaligned<short>(vector + 4);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[4] - Unsafe.ReadUnaligned<short>(vector + 8);
+        d = (long)Unsafe.Add(ref q, 4) - Unsafe.ReadUnaligned<short>(vector + 8);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[7] - Unsafe.ReadUnaligned<short>(vector + 14);
+        d = (long)Unsafe.Add(ref q, 7) - Unsafe.ReadUnaligned<short>(vector + 14);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[0] - Unsafe.ReadUnaligned<short>(vector);
+        d = q - Unsafe.ReadUnaligned<short>(vector);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[1] - Unsafe.ReadUnaligned<short>(vector + 2);
+        d = (long)Unsafe.Add(ref q, 1) - Unsafe.ReadUnaligned<short>(vector + 2);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[8] - Unsafe.ReadUnaligned<short>(vector + 16);
+        d = (long)Unsafe.Add(ref q, 8) - Unsafe.ReadUnaligned<short>(vector + 16);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[12] - Unsafe.ReadUnaligned<short>(vector + 24);
+        d = (long)Unsafe.Add(ref q, 12) - Unsafe.ReadUnaligned<short>(vector + 24);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[3] - Unsafe.ReadUnaligned<short>(vector + 6);
+        d = (long)Unsafe.Add(ref q, 3) - Unsafe.ReadUnaligned<short>(vector + 6);
         sum += d * d;
         if (sum >= cutoff) return sum;
 
-        d = (long)query[13] - Unsafe.ReadUnaligned<short>(vector + 26);
+        d = (long)Unsafe.Add(ref q, 13) - Unsafe.ReadUnaligned<short>(vector + 26);
         sum += d * d;
 
         return sum;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private byte Label(uint id)
     {
         return *(_ptr + _labelsOffset + id);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private uint BucketOffset(int key)
     {
         return Unsafe.ReadUnaligned<uint>(_ptr + _bucketOffsetsOffset + key * 4L);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private uint BucketItem(uint pos)
     {
         return Unsafe.ReadUnaligned<uint>(_ptr + _bucketItemsOffset + pos * 4L);
@@ -846,6 +836,7 @@ CandidateSearchDone:
                 (query[0] >= 2500 && query[0] <= 3100 && query[2] >= 9000));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int ProfileKey(ReadOnlySpan<short> vector)
     {
         var key = 0;
@@ -864,6 +855,7 @@ CandidateSearchDone:
         return key;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int ProfileKey(byte* vector)
     {
         var key = 0;

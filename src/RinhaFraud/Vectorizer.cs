@@ -4,6 +4,8 @@ using System;
 
 internal static class Vectorizer
 {
+    private static readonly ushort[] NeighborKeyOrders = BuildNeighborKeyOrders();
+
     public static void Vectorize(in Payload payload, Span<short> output)
     {
         Vectorize(
@@ -122,8 +124,34 @@ internal static class Vectorizer
         var kmHome = Bucket8(query[7]);
         var hour = Bucket4(query[3]);
         var noLast = query[5] < 0 ? 1 : 0;
-        var count = 0;
+        return FillNeighborKeys(amount, ratio, kmHome, hour, noLast, output, seen);
+    }
 
+    public static ReadOnlySpan<ushort> NeighborKeyOrderFor(ReadOnlySpan<short> query)
+    {
+        return NeighborKeyOrderForBucketKey(BucketKey(query));
+    }
+
+    internal static ReadOnlySpan<ushort> NeighborKeyOrderForBucketKey(int bucketKey)
+    {
+        return NeighborKeyOrders.AsSpan(bucketKey * Constants.BucketCount, Constants.BucketCount);
+    }
+
+    private static double AmountVsAverage(double amount, double average)
+    {
+        return average <= 0.0 ? 1.0 : (amount / average) / 10.0;
+    }
+
+    private static int FillNeighborKeys(
+        int amount,
+        int ratio,
+        int kmHome,
+        int hour,
+        int noLast,
+        Span<ushort> output,
+        Span<byte> seen)
+    {
+        var count = 0;
         seen.Clear();
         for (var radius = 0; radius < 8; radius++)
         {
@@ -157,9 +185,29 @@ internal static class Vectorizer
         return count;
     }
 
-    private static double AmountVsAverage(double amount, double average)
+    private static ushort[] BuildNeighborKeyOrders()
     {
-        return average <= 0.0 ? 1.0 : (amount / average) / 10.0;
+        var orders = new ushort[Constants.BucketCount * Constants.BucketCount];
+        var buffer = new ushort[Constants.BucketCount];
+        var seen = new byte[Constants.BucketCount];
+
+        for (var bucketKey = 0; bucketKey < Constants.BucketCount; bucketKey++)
+        {
+            var amount = bucketKey & 7;
+            var ratio = (bucketKey >> 3) & 7;
+            var kmHome = (bucketKey >> 6) & 7;
+            var hour = (bucketKey >> 9) & 3;
+            var noLast = (bucketKey >> 11) & 1;
+            var count = FillNeighborKeys(amount, ratio, kmHome, hour, noLast, buffer, seen);
+            if (count != Constants.BucketCount)
+            {
+                throw new InvalidOperationException($"neighbor key table incomplete for bucket {bucketKey}, count={count}");
+            }
+
+            Array.Copy(buffer, 0, orders, bucketKey * Constants.BucketCount, Constants.BucketCount);
+        }
+
+        return orders;
     }
 
     private static double Clamp01(double value)

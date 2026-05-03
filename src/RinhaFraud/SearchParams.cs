@@ -15,6 +15,8 @@ internal readonly struct SearchParams
     public readonly bool Flat;
     public readonly bool ProfileFastPath;
     public readonly int ProfileMinCount;
+    public readonly int ProfileLegitMinCount;
+    public readonly int ProfileFraudMinCount;
     public readonly int ExactFallback;
 
     public SearchParams(
@@ -24,6 +26,8 @@ internal readonly struct SearchParams
         bool flat,
         bool profileFastPath,
         int profileMinCount,
+        int profileLegitMinCount,
+        int profileFraudMinCount,
         int exactFallback)
     {
         EarlyCandidates = Math.Clamp(earlyCandidates, Constants.K, minCandidates);
@@ -32,6 +36,8 @@ internal readonly struct SearchParams
         Flat = flat;
         ProfileFastPath = profileFastPath;
         ProfileMinCount = Math.Max(1, profileMinCount);
+        ProfileLegitMinCount = Math.Max(1, profileLegitMinCount);
+        ProfileFraudMinCount = Math.Max(1, profileFraudMinCount);
         ExactFallback = Math.Clamp(exactFallback, ExactFallbackOff, ExactFallbackProfileMiss);
     }
 
@@ -40,13 +46,16 @@ internal readonly struct SearchParams
         var minCandidates = EnvInt("MIN_CANDIDATES", 36_000);
         var maxCandidates = Math.Max(EnvInt("MAX_CANDIDATES", 72_000), minCandidates);
         var earlyCandidates = EnvInt("EARLY_CANDIDATES", 30_000);
+        var profileMinCount = EnvInt("PROFILE_MIN_COUNT", 20);
         return new SearchParams(
             earlyCandidates,
             minCandidates,
             maxCandidates,
             Environment.GetEnvironmentVariable("SEARCH_MODE") == "flat",
             EnvBool("PROFILE_FASTPATH", true),
-            EnvInt("PROFILE_MIN_COUNT", 20),
+            profileMinCount,
+            EnvInt("PROFILE_LEGIT_MIN_COUNT", profileMinCount),
+            EnvInt("PROFILE_FRAUD_MIN_COUNT", profileMinCount),
             ExactFallbackMode(Environment.GetEnvironmentVariable("EXACT_FALLBACK")));
     }
 

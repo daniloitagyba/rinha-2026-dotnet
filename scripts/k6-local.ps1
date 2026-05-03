@@ -10,6 +10,8 @@ param(
     [string]$MaxCandidates = $env:MAX_CANDIDATES,
     [string]$ProfileFastPath = $env:PROFILE_FASTPATH,
     [string]$ProfileMinCount = $env:PROFILE_MIN_COUNT,
+    [string]$ProfileLegitMinCount = $env:PROFILE_LEGIT_MIN_COUNT,
+    [string]$ProfileFraudMinCount = $env:PROFILE_FRAUD_MIN_COUNT,
     [string]$ExactFallback = $env:EXACT_FALLBACK,
     [string]$Workers = $env:WORKERS,
     [string]$ServerMode = $env:SERVER_MODE,
@@ -60,6 +62,8 @@ $apiOverrides = [ordered]@{
     "MAX_CANDIDATES" = $MaxCandidates
     "PROFILE_FASTPATH" = $ProfileFastPath
     "PROFILE_MIN_COUNT" = $ProfileMinCount
+    "PROFILE_LEGIT_MIN_COUNT" = $ProfileLegitMinCount
+    "PROFILE_FRAUD_MIN_COUNT" = $ProfileFraudMinCount
     "EXACT_FALLBACK" = $ExactFallback
     "WORKERS" = $Workers
     "SERVER_MODE" = $ServerMode

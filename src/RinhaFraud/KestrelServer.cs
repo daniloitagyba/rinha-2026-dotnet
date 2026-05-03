@@ -4,6 +4,7 @@ using System;
 using System.Buffers;
 using System.IO;
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
@@ -96,7 +97,7 @@ internal static class KestrelServer
         }
 
         Console.Error.WriteLine(
-            $"serving on {bindAddress}, server_mode=kestrel, tp_min_threads={minThreads}, socket_io_queues={socketIoQueues}, socket_wait_for_data={(socketWaitForData.HasValue ? socketWaitForData.Value : "default")}, socket_inline_scheduling={(socketInlineScheduling.HasValue ? socketInlineScheduling.Value : "default")}, index={indexPath}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, exact_fallback={searchParams.ExactFallback}, risky_fallback_refs={index.RiskyFallbackCount}");
+            $"serving on {bindAddress}, server_mode=kestrel, tp_min_threads={minThreads}, socket_io_queues={socketIoQueues}, socket_wait_for_data={(socketWaitForData.HasValue ? socketWaitForData.Value : "default")}, socket_inline_scheduling={(socketInlineScheduling.HasValue ? socketInlineScheduling.Value : "default")}, index={indexPath}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, profile_legit_min_count={searchParams.ProfileLegitMinCount}, profile_fraud_min_count={searchParams.ProfileFraudMinCount}, exact_fallback={searchParams.ExactFallback}, risky_fallback_refs={index.RiskyFallbackCount}");
 
         app.Run(context => HandleRequestAsync(context, index, searchParams));
 
@@ -107,19 +108,13 @@ internal static class KestrelServer
     {
         if (HttpMethods.IsGet(context.Request.Method) && context.Request.Path == "/ready")
         {
-            context.Response.StatusCode = StatusCodes.Status200OK;
-            context.Response.ContentType = "text/plain";
-            context.Response.ContentLength = ReadyBody.Length;
-            await context.Response.BodyWriter.WriteAsync(ReadyBody, context.RequestAborted);
+            WriteBody(context, ReadyBody, "text/plain", StatusCodes.Status200OK);
             return;
         }
 
         if (!HttpMethods.IsPost(context.Request.Method) || context.Request.Path != "/fraud-score")
         {
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            context.Response.ContentType = "text/plain";
-            context.Response.ContentLength = NotFoundBody.Length;
-            await context.Response.BodyWriter.WriteAsync(NotFoundBody, context.RequestAborted);
+            WriteBody(context, NotFoundBody, "text/plain", StatusCodes.Status404NotFound);
             return;
         }
 
@@ -136,7 +131,7 @@ internal static class KestrelServer
             var buffer = readResult.Buffer;
             if (buffer.Length > Constants.MaxRequestBytes)
             {
-                await WriteJsonAsync(context, DefaultBody);
+                WriteJson(context, DefaultBody);
                 return;
             }
 
@@ -154,11 +149,11 @@ internal static class KestrelServer
 
             var responseBody = Classify(body, index, searchParams);
             reader.AdvanceTo(buffer.End);
-            await WriteJsonAsync(context, responseBody);
+            WriteJson(context, responseBody);
         }
         catch
         {
-            await WriteJsonAsync(context, DefaultBody);
+            WriteJson(context, DefaultBody);
         }
         finally
         {
@@ -169,6 +164,7 @@ internal static class KestrelServer
         }
     }
 
+    [SkipLocalsInit]
     private static ReadOnlyMemory<byte> Classify(ReadOnlySpan<byte> body, BinaryIndex index, SearchParams searchParams)
     {
         Span<short> query = stackalloc short[Constants.Dim];
@@ -189,12 +185,17 @@ internal static class KestrelServer
         };
     }
 
-    private static Task WriteJsonAsync(HttpContext context, ReadOnlyMemory<byte> body)
+    private static void WriteJson(HttpContext context, ReadOnlyMemory<byte> body)
     {
-        context.Response.StatusCode = StatusCodes.Status200OK;
-        context.Response.ContentType = "application/json";
+        WriteBody(context, body, "application/json", StatusCodes.Status200OK);
+    }
+
+    private static void WriteBody(HttpContext context, ReadOnlyMemory<byte> body, string contentType, int statusCode)
+    {
+        context.Response.StatusCode = statusCode;
+        context.Response.ContentType = contentType;
         context.Response.ContentLength = body.Length;
-        return context.Response.BodyWriter.WriteAsync(body, context.RequestAborted).AsTask();
+        context.Response.BodyWriter.Write(body.Span);
     }
 
     private static IPEndPoint ParseEndpoint(string value)

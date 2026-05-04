@@ -69,9 +69,8 @@ internal static class HttpServer
                 socket = listener.Accept();
                 ConfigureAcceptedSocket(socket, keepAliveIdleMs);
                 ThreadPool.UnsafeQueueUserWorkItem(
-                    static state =>
+                    static (ConnectionWork work) =>
                     {
-                        var work = (ConnectionWork)state!;
                         using var accepted = work.Socket;
                         try
                         {
@@ -153,7 +152,24 @@ internal static class HttpServer
         }
     }
 
-    private sealed record ConnectionWork(Socket Socket, BinaryIndex Index, SearchParams SearchParams, int KeepAliveRequests);
+    private readonly struct ConnectionWork
+    {
+        public ConnectionWork(Socket socket, BinaryIndex index, SearchParams searchParams, int keepAliveRequests)
+        {
+            Socket = socket;
+            Index = index;
+            SearchParams = searchParams;
+            KeepAliveRequests = keepAliveRequests;
+        }
+
+        public Socket Socket { get; }
+
+        public BinaryIndex Index { get; }
+
+        public SearchParams SearchParams { get; }
+
+        public int KeepAliveRequests { get; }
+    }
 
     private static void HandleRequest(Socket socket, ReadOnlySpan<byte> request, BinaryIndex index, SearchParams searchParams)
     {

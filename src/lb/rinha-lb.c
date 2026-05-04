@@ -4,36 +4,49 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/tcp.h>
-#include <poll.h>
-#include <pthread.h>
 #include <signal.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
 
 #define BUFFER_SIZE 8192
 #define BACKEND_COUNT 2
+#define MAX_EVENTS 1024
 
 static const char *backend_paths[BACKEND_COUNT] = {
     "/sockets/api1.sock",
     "/sockets/api2.sock",
 };
 
-static atomic_uint next_backend = 0;
-typedef struct connection {
+typedef struct connection connection_t;
+
+typedef struct fd_state {
+    int fd;
+    int is_client;
+    connection_t *connection;
+} fd_state_t;
+
+struct connection {
     int client_fd;
     int backend_fd;
+    int closed;
+    fd_state_t client;
+    fd_state_t backend;
     unsigned char c2b[BUFFER_SIZE];
     unsigned char b2c[BUFFER_SIZE];
     size_t c2b_off;
     size_t c2b_len;
     size_t b2c_off;
     size_t b2c_len;
-} connection_t;
+    connection_t *next_closed;
+};
+
+static unsigned int next_backend = 0;
+static connection_t *closed_head = NULL;
 
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -49,10 +62,22 @@ static void set_tcp_nodelay(int fd) {
     (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value));
 }
 
-static int connect_backend(unsigned int start, unsigned int *selected_index) {
+static void set_small_socket_buffers(int fd) {
+    int value = 16384;
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, sizeof(value));
+    (void)setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &value, sizeof(value));
+}
+
+static unsigned int choose_backend(void) {
+    unsigned int backend = next_backend;
+    next_backend = (next_backend + 1) % BACKEND_COUNT;
+    return backend;
+}
+
+static int connect_backend(unsigned int start) {
     for (unsigned int attempt = 0; attempt < BACKEND_COUNT; attempt++) {
         unsigned int index = (start + attempt) % BACKEND_COUNT;
-        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
         if (fd < 0) {
             continue;
         }
@@ -63,7 +88,7 @@ static int connect_backend(unsigned int start, unsigned int *selected_index) {
         strncpy(addr.sun_path, backend_paths[index], sizeof(addr.sun_path) - 1);
 
         if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
-            *selected_index = index;
+            set_small_socket_buffers(fd);
             return fd;
         }
 
@@ -75,13 +100,17 @@ static int connect_backend(unsigned int start, unsigned int *selected_index) {
 
 static int flush_buffer(int fd, unsigned char *buffer, size_t *offset, size_t *length) {
     while (*offset < *length) {
-        ssize_t written = write(fd, buffer + *offset, *length - *offset);
+        ssize_t written = send(fd, buffer + *offset, *length - *offset, MSG_NOSIGNAL);
         if (written > 0) {
             *offset += (size_t)written;
             continue;
         }
 
-        if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+
+        if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             return 0;
         }
 
@@ -94,7 +123,7 @@ static int flush_buffer(int fd, unsigned char *buffer, size_t *offset, size_t *l
 }
 
 static int fill_buffer(int fd, unsigned char *buffer, size_t *length) {
-    ssize_t got = read(fd, buffer, BUFFER_SIZE);
+    ssize_t got = recv(fd, buffer, BUFFER_SIZE, 0);
     if (got > 0) {
         *length = (size_t)got;
         return 1;
@@ -104,92 +133,197 @@ static int fill_buffer(int fd, unsigned char *buffer, size_t *length) {
         return -1;
     }
 
-    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+    if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
         return 0;
     }
 
     return -1;
 }
 
-static void *proxy_connection(void *state) {
-    connection_t *conn = (connection_t *)state;
-    set_nonblocking(conn->client_fd);
-    set_nonblocking(conn->backend_fd);
+static void schedule_close(int epoll_fd, connection_t *conn) {
+    if (conn == NULL || conn->closed) {
+        return;
+    }
 
-    for (;;) {
-        struct pollfd fds[2];
-        fds[0].fd = conn->client_fd;
-        fds[0].events = 0;
-        fds[1].fd = conn->backend_fd;
-        fds[1].events = 0;
+    conn->closed = 1;
+    (void)epoll_ctl(epoll_fd, EPOLL_CTL_DEL, conn->client_fd, NULL);
+    (void)epoll_ctl(epoll_fd, EPOLL_CTL_DEL, conn->backend_fd, NULL);
+    close(conn->client_fd);
+    close(conn->backend_fd);
 
+    conn->next_closed = closed_head;
+    closed_head = conn;
+}
+
+static void reap_closed(void) {
+    connection_t *conn = closed_head;
+    closed_head = NULL;
+
+    while (conn != NULL) {
+        connection_t *next = conn->next_closed;
+        free(conn);
+        conn = next;
+    }
+}
+
+static int fd_events(const fd_state_t *state) {
+    const connection_t *conn = state->connection;
+    int events = EPOLLERR | EPOLLHUP | EPOLLRDHUP;
+
+    if (state->is_client) {
         if (conn->c2b_len == 0) {
-            fds[0].events |= POLLIN;
+            events |= EPOLLIN;
         }
-        if (conn->b2c_len > 0) {
-            fds[0].events |= POLLOUT;
+
+        if (conn->b2c_len > conn->b2c_off) {
+            events |= EPOLLOUT;
         }
+    } else {
         if (conn->b2c_len == 0) {
-            fds[1].events |= POLLIN;
-        }
-        if (conn->c2b_len > 0) {
-            fds[1].events |= POLLOUT;
+            events |= EPOLLIN;
         }
 
-        int ready = poll(fds, 2, 5000);
-        if (ready <= 0) {
-            break;
-        }
-
-        if ((fds[0].revents & (POLLERR | POLLNVAL)) || (fds[1].revents & (POLLERR | POLLNVAL))) {
-            break;
-        }
-
-        if ((fds[0].revents & POLLOUT) && conn->b2c_len > 0) {
-            if (flush_buffer(conn->client_fd, conn->b2c, &conn->b2c_off, &conn->b2c_len) < 0) {
-                break;
-            }
-        }
-
-        if ((fds[1].revents & POLLOUT) && conn->c2b_len > 0) {
-            if (flush_buffer(conn->backend_fd, conn->c2b, &conn->c2b_off, &conn->c2b_len) < 0) {
-                break;
-            }
-        }
-
-        if ((fds[0].revents & POLLIN) && conn->c2b_len == 0) {
-            if (fill_buffer(conn->client_fd, conn->c2b, &conn->c2b_len) < 0) {
-                break;
-            }
-        }
-
-        if ((fds[1].revents & POLLIN) && conn->b2c_len == 0) {
-            if (fill_buffer(conn->backend_fd, conn->b2c, &conn->b2c_len) < 0) {
-                break;
-            }
-        }
-
-        if ((fds[0].revents & POLLHUP) && conn->c2b_len == 0) {
-            break;
-        }
-
-        if ((fds[1].revents & POLLHUP) && conn->b2c_len == 0) {
-            break;
+        if (conn->c2b_len > conn->c2b_off) {
+            events |= EPOLLOUT;
         }
     }
 
-    close(conn->client_fd);
-    close(conn->backend_fd);
-    free(conn);
-    return NULL;
+    return events;
 }
 
-static unsigned int choose_backend(void) {
-    return atomic_fetch_add_explicit(&next_backend, 1, memory_order_relaxed) % BACKEND_COUNT;
+static int update_fd(int epoll_fd, fd_state_t *state) {
+    struct epoll_event event;
+    memset(&event, 0, sizeof(event));
+    event.events = fd_events(state);
+    event.data.ptr = state;
+    return epoll_ctl(epoll_fd, EPOLL_CTL_MOD, state->fd, &event);
+}
+
+static int add_fd(int epoll_fd, fd_state_t *state) {
+    struct epoll_event event;
+    memset(&event, 0, sizeof(event));
+    event.events = fd_events(state);
+    event.data.ptr = state;
+    return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, state->fd, &event);
+}
+
+static int update_connection(int epoll_fd, connection_t *conn) {
+    if (update_fd(epoll_fd, &conn->client) < 0) {
+        return -1;
+    }
+
+    if (update_fd(epoll_fd, &conn->backend) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static void accept_clients(int epoll_fd, int listener) {
+    for (;;) {
+        int client_fd = accept4(listener, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        if (client_fd < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return;
+            }
+
+            perror("accept");
+            return;
+        }
+
+        set_tcp_nodelay(client_fd);
+        set_small_socket_buffers(client_fd);
+
+        int backend_fd = connect_backend(choose_backend());
+        if (backend_fd < 0) {
+            close(client_fd);
+            continue;
+        }
+
+        connection_t *conn = calloc(1, sizeof(connection_t));
+        if (conn == NULL) {
+            close(client_fd);
+            close(backend_fd);
+            continue;
+        }
+
+        conn->client_fd = client_fd;
+        conn->backend_fd = backend_fd;
+        conn->client.fd = client_fd;
+        conn->client.is_client = 1;
+        conn->client.connection = conn;
+        conn->backend.fd = backend_fd;
+        conn->backend.is_client = 0;
+        conn->backend.connection = conn;
+
+        if (add_fd(epoll_fd, &conn->client) < 0 || add_fd(epoll_fd, &conn->backend) < 0) {
+            schedule_close(epoll_fd, conn);
+        }
+    }
+}
+
+static void process_proxy_event(int epoll_fd, fd_state_t *state, uint32_t events) {
+    connection_t *conn = state->connection;
+    if (conn->closed) {
+        return;
+    }
+
+    int close_connection = 0;
+
+    if (state->is_client) {
+        if ((events & EPOLLOUT) && conn->b2c_len > conn->b2c_off) {
+            if (flush_buffer(conn->client_fd, conn->b2c, &conn->b2c_off, &conn->b2c_len) < 0) {
+                close_connection = 1;
+            }
+        }
+
+        if (!close_connection && (events & EPOLLIN) && conn->c2b_len == 0) {
+            if (fill_buffer(conn->client_fd, conn->c2b, &conn->c2b_len) < 0) {
+                close_connection = 1;
+            }
+        }
+
+        if ((events & EPOLLRDHUP) && conn->c2b_len == 0) {
+            close_connection = 1;
+        }
+    } else {
+        if ((events & EPOLLOUT) && conn->c2b_len > conn->c2b_off) {
+            if (flush_buffer(conn->backend_fd, conn->c2b, &conn->c2b_off, &conn->c2b_len) < 0) {
+                close_connection = 1;
+            }
+        }
+
+        if (!close_connection && (events & EPOLLIN) && conn->b2c_len == 0) {
+            if (fill_buffer(conn->backend_fd, conn->b2c, &conn->b2c_len) < 0) {
+                close_connection = 1;
+            }
+        }
+
+        if ((events & EPOLLRDHUP) && conn->b2c_len == 0) {
+            close_connection = 1;
+        }
+    }
+
+    if (events & (EPOLLERR | EPOLLHUP)) {
+        close_connection = 1;
+    }
+
+    if (close_connection) {
+        schedule_close(epoll_fd, conn);
+        return;
+    }
+
+    if (update_connection(epoll_fd, conn) < 0) {
+        schedule_close(epoll_fd, conn);
+    }
 }
 
 static int create_listener(int port) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) {
         return -1;
     }
@@ -231,46 +365,55 @@ int main(void) {
         return 1;
     }
 
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    pthread_attr_setstacksize(&attr, 64 * 1024);
+    int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+    if (epoll_fd < 0) {
+        perror("epoll_create1");
+        close(listener);
+        return 1;
+    }
 
-    fprintf(stderr, "serving tcp proxy on 0.0.0.0:%d\n", port);
+    fd_state_t listener_state;
+    memset(&listener_state, 0, sizeof(listener_state));
+    listener_state.fd = listener;
+    listener_state.is_client = -1;
+
+    struct epoll_event listener_event;
+    memset(&listener_event, 0, sizeof(listener_event));
+    listener_event.events = EPOLLIN;
+    listener_event.data.ptr = &listener_state;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listener, &listener_event) < 0) {
+        perror("epoll_ctl");
+        close(listener);
+        close(epoll_fd);
+        return 1;
+    }
+
+    fprintf(stderr, "serving epoll tcp proxy on 0.0.0.0:%d\n", port);
+
+    struct epoll_event events[MAX_EVENTS];
     for (;;) {
-        int client_fd = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
-        if (client_fd < 0) {
+        int ready = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
+        if (ready < 0) {
             if (errno == EINTR) {
                 continue;
             }
-            perror("accept");
-            continue;
+
+            perror("epoll_wait");
+            break;
         }
 
-        set_tcp_nodelay(client_fd);
-        unsigned int backend = choose_backend();
-        unsigned int backend_index = backend;
-        int backend_fd = connect_backend(backend, &backend_index);
-        if (backend_fd < 0) {
-            close(client_fd);
-            continue;
+        for (int i = 0; i < ready; i++) {
+            if (events[i].data.ptr == &listener_state) {
+                accept_clients(epoll_fd, listener);
+            } else {
+                process_proxy_event(epoll_fd, (fd_state_t *)events[i].data.ptr, events[i].events);
+            }
         }
 
-        connection_t *conn = calloc(1, sizeof(connection_t));
-        if (conn == NULL) {
-            close(client_fd);
-            close(backend_fd);
-            continue;
-        }
-
-        conn->client_fd = client_fd;
-        conn->backend_fd = backend_fd;
-
-        pthread_t thread;
-        if (pthread_create(&thread, &attr, proxy_connection, conn) != 0) {
-            close(client_fd);
-            close(backend_fd);
-            free(conn);
-        }
+        reap_closed();
     }
+
+    close(listener);
+    close(epoll_fd);
+    return 1;
 }

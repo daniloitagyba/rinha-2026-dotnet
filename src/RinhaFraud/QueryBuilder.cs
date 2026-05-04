@@ -1,8 +1,6 @@
 namespace RinhaFraud;
 
 using System;
-using System.Buffers.Text;
-
 internal static class QueryBuilder
 {
     public static bool TryBuildQuery(ReadOnlySpan<byte> body, Span<short> output)
@@ -628,21 +626,74 @@ internal static class QueryBuilder
         value = 0;
         pos = SkipWhiteSpace(source, pos);
         var start = pos;
-        while ((uint)pos < (uint)source.Length)
-        {
-            var b = source[pos];
-            if (IsDigit(b) || b is (byte)'-' or (byte)'+' or (byte)'.' or (byte)'e' or (byte)'E')
-            {
-                pos++;
-                continue;
-            }
 
-            break;
+        var negative = false;
+        if ((uint)pos < (uint)source.Length && source[pos] is (byte)'-' or (byte)'+')
+        {
+            negative = source[pos] == (byte)'-';
+            pos++;
         }
 
-        return pos > start &&
-               Utf8Parser.TryParse(source[start..pos], out value, out var consumed) &&
-               consumed == pos - start;
+        long integer = 0;
+        var digits = 0;
+        while ((uint)pos < (uint)source.Length)
+        {
+            var digit = source[pos] - (byte)'0';
+            if ((uint)digit > 9)
+            {
+                break;
+            }
+
+            integer = integer * 10 + digit;
+            digits++;
+            pos++;
+        }
+
+        double result = integer;
+        if ((uint)pos < (uint)source.Length && source[pos] == (byte)'.')
+        {
+            pos++;
+            var scale = 0.1;
+            while ((uint)pos < (uint)source.Length)
+            {
+                var digit = source[pos] - (byte)'0';
+                if ((uint)digit > 9)
+                {
+                    break;
+                }
+
+                result += digit * scale;
+                scale *= 0.1;
+                digits++;
+                pos++;
+            }
+        }
+
+        if (digits == 0)
+        {
+            pos = start;
+            return false;
+        }
+
+        if ((uint)pos < (uint)source.Length && source[pos] is (byte)'e' or (byte)'E')
+        {
+            pos++;
+            if ((uint)pos < (uint)source.Length && source[pos] is (byte)'-' or (byte)'+')
+            {
+                pos++;
+            }
+
+            while ((uint)pos < (uint)source.Length && IsDigit(source[pos]))
+            {
+                pos++;
+            }
+
+            return System.Buffers.Text.Utf8Parser.TryParse(source[start..pos], out value, out var consumed) &&
+                   consumed == pos - start;
+        }
+
+        value = negative ? -result : result;
+        return true;
     }
 
     private static bool TryReadBool(ReadOnlySpan<byte> source, ref int pos, out bool value)

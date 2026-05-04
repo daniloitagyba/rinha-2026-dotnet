@@ -24,6 +24,7 @@ internal static class HttpServer
         var bindAddress = Environment.GetEnvironmentVariable("BIND_ADDR") ?? "0.0.0.0:8080";
         var indexPath = Environment.GetEnvironmentVariable("INDEX_PATH") ?? "/app/data/references.idx";
         var workerCount = Math.Max(1, EnvInt("WORKERS", 1));
+        var minThreads = EnvInt("TP_MIN_THREADS", 0);
         var keepAliveRequests = Math.Max(0, EnvInt("KEEP_ALIVE_REQUESTS", 0));
         var keepAliveIdleMs = Math.Max(100, EnvInt("KEEP_ALIVE_IDLE_MS", 5000));
         var searchParams = SearchParams.FromEnvironment();
@@ -35,10 +36,15 @@ internal static class HttpServer
             Console.Error.WriteLine($"prefetched index pages, checksum={checksum}");
         }
 
+        if (minThreads > 0)
+        {
+            ThreadPool.SetMinThreads(minThreads, minThreads);
+        }
+
         using var listener = CreateListener(bindAddress);
 
         Console.Error.WriteLine(
-            $"serving on {bindAddress}, server_mode=raw, index={indexPath}, workers={workerCount}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, profile_legit_min_count={searchParams.ProfileLegitMinCount}, profile_fraud_min_count={searchParams.ProfileFraudMinCount}, exact_fallback={searchParams.ExactFallback}, risky_fallback_refs={index.RiskyFallbackCount}");
+            $"serving on {bindAddress}, server_mode=raw, tp_min_threads={minThreads}, index={indexPath}, workers={workerCount}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, profile_legit_min_count={searchParams.ProfileLegitMinCount}, profile_fraud_min_count={searchParams.ProfileFraudMinCount}, exact_fallback={searchParams.ExactFallback}, risky_fallback_refs={index.RiskyFallbackCount}");
 
         for (var i = 0; i < workerCount; i++)
         {

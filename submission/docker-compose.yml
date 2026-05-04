@@ -1,11 +1,11 @@
 services:
   lb:
-    image: haproxy:2.9-alpine
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:21d1c12b8f2d95c17f798d361f119b06a507fb7a
     platform: linux/amd64
+    entrypoint: ["rinha-lb"]
     ports:
       - "9999:9999"
     volumes:
-      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       - backend-sockets:/sockets
     depends_on:
       - api1
@@ -17,21 +17,21 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:765ca17f4f21ffead5afd35e2ee9bd808356e97e
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:21d1c12b8f2d95c17f798d361f119b06a507fb7a
     platform: linux/amd64
     environment:
       BIND_ADDR: unix:/sockets/api1.sock
       INDEX_PATH: /app/data/references.idx
-      SERVER_MODE: kestrel
-      SOCKET_IO_QUEUES: "1"
-      SOCKET_INLINE_SCHEDULING: "1"
-      SOCKET_WAIT_FOR_DATA: "0"
-      WORKERS: "1"
-      EARLY_CANDIDATES: "16200"
-      MIN_CANDIDATES: "16200"
-      MAX_CANDIDATES: "32400"
+      SERVER_MODE: raw
+      TP_MIN_THREADS: "64"
+      WORKERS: "2"
+      EARLY_CANDIDATES: "9800"
+      MIN_CANDIDATES: "16150"
+      MAX_CANDIDATES: "24200"
       PROFILE_FASTPATH: "1"
-      PROFILE_MIN_COUNT: "20"
+      PROFILE_MIN_COUNT: "15"
+      PROFILE_LEGIT_MIN_COUNT: "5"
+      PROFILE_FRAUD_MIN_COUNT: "15"
       EXACT_FALLBACK: "risky"
     volumes:
       - backend-sockets:/sockets
@@ -42,21 +42,21 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:765ca17f4f21ffead5afd35e2ee9bd808356e97e
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:21d1c12b8f2d95c17f798d361f119b06a507fb7a
     platform: linux/amd64
     environment:
       BIND_ADDR: unix:/sockets/api2.sock
       INDEX_PATH: /app/data/references.idx
-      SERVER_MODE: kestrel
-      SOCKET_IO_QUEUES: "1"
-      SOCKET_INLINE_SCHEDULING: "1"
-      SOCKET_WAIT_FOR_DATA: "0"
-      WORKERS: "1"
-      EARLY_CANDIDATES: "16200"
-      MIN_CANDIDATES: "16200"
-      MAX_CANDIDATES: "32400"
+      SERVER_MODE: raw
+      TP_MIN_THREADS: "64"
+      WORKERS: "2"
+      EARLY_CANDIDATES: "9800"
+      MIN_CANDIDATES: "16150"
+      MAX_CANDIDATES: "24200"
       PROFILE_FASTPATH: "1"
-      PROFILE_MIN_COUNT: "20"
+      PROFILE_MIN_COUNT: "15"
+      PROFILE_LEGIT_MIN_COUNT: "5"
+      PROFILE_FRAUD_MIN_COUNT: "15"
       EXACT_FALLBACK: "risky"
     volumes:
       - backend-sockets:/sockets

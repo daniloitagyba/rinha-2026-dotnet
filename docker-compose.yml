@@ -24,11 +24,9 @@ services:
     environment:
       BIND_ADDR: unix:/sockets/api1.sock
       INDEX_PATH: /app/data/references.idx
-      SERVER_MODE: kestrel
-      SOCKET_IO_QUEUES: "0"
-      SOCKET_INLINE_SCHEDULING: "1"
-      SOCKET_WAIT_FOR_DATA: "1"
-      WORKERS: "1"
+      SERVER_MODE: raw
+      TP_MIN_THREADS: "64"
+      WORKERS: "2"
       EARLY_CANDIDATES: "9800"
       MIN_CANDIDATES: "16150"
       MAX_CANDIDATES: "24200"
@@ -52,11 +50,9 @@ services:
     environment:
       BIND_ADDR: unix:/sockets/api2.sock
       INDEX_PATH: /app/data/references.idx
-      SERVER_MODE: kestrel
-      SOCKET_IO_QUEUES: "0"
-      SOCKET_INLINE_SCHEDULING: "1"
-      SOCKET_WAIT_FOR_DATA: "1"
-      WORKERS: "1"
+      SERVER_MODE: raw
+      TP_MIN_THREADS: "64"
+      WORKERS: "2"
       EARLY_CANDIDATES: "9800"
       MIN_CANDIDATES: "16150"
       MAX_CANDIDATES: "24200"

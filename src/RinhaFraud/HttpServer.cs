@@ -5,19 +5,30 @@ using System.Buffers;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
 
 internal static class HttpServer
 {
-    private static ReadOnlySpan<byte> ReadyResponse => "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nOK"u8;
-    private static ReadOnlySpan<byte> NotFoundResponse => "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nnot found"u8;
-    private static ReadOnlySpan<byte> DefaultResponse => "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.0}"u8;
-    private static ReadOnlySpan<byte> Approved00Response => "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.0}"u8;
-    private static ReadOnlySpan<byte> Approved02Response => "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.2}"u8;
-    private static ReadOnlySpan<byte> Approved04Response => "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.4}"u8;
-    private static ReadOnlySpan<byte> Denied06Response => "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n{\"approved\":false,\"fraud_score\":0.6}"u8;
-    private static ReadOnlySpan<byte> Denied08Response => "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n{\"approved\":false,\"fraud_score\":0.8}"u8;
-    private static ReadOnlySpan<byte> Denied10Response => "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n{\"approved\":false,\"fraud_score\":1.0}"u8;
+    private static readonly byte[] ReadyResponseBytes = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nOK"u8.ToArray();
+    private static readonly byte[] NotFoundResponseBytes = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nnot found"u8.ToArray();
+    private static readonly byte[] DefaultResponseBytes = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.0}"u8.ToArray();
+    private static readonly byte[] Approved00ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.0}"u8.ToArray();
+    private static readonly byte[] Approved02ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.2}"u8.ToArray();
+    private static readonly byte[] Approved04ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.4}"u8.ToArray();
+    private static readonly byte[] Denied06ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n{\"approved\":false,\"fraud_score\":0.6}"u8.ToArray();
+    private static readonly byte[] Denied08ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n{\"approved\":false,\"fraud_score\":0.8}"u8.ToArray();
+    private static readonly byte[] Denied10ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n{\"approved\":false,\"fraud_score\":1.0}"u8.ToArray();
+    private static ReadOnlySpan<byte> ReadyResponse => ReadyResponseBytes;
+    private static ReadOnlySpan<byte> NotFoundResponse => NotFoundResponseBytes;
+    private static ReadOnlySpan<byte> DefaultResponse => DefaultResponseBytes;
+    private static ReadOnlySpan<byte> Approved00Response => Approved00ResponseBytes;
+    private static ReadOnlySpan<byte> Approved02Response => Approved02ResponseBytes;
+    private static ReadOnlySpan<byte> Approved04Response => Approved04ResponseBytes;
+    private static ReadOnlySpan<byte> Denied06Response => Denied06ResponseBytes;
+    private static ReadOnlySpan<byte> Denied08Response => Denied08ResponseBytes;
+    private static ReadOnlySpan<byte> Denied10Response => Denied10ResponseBytes;
 
     public static void Serve()
     {
@@ -43,12 +54,17 @@ internal static class HttpServer
 
         using var listener = CreateListener(bindAddress);
 
+        var asyncMode = string.Equals(Environment.GetEnvironmentVariable("SERVER_MODE"), "raw-async", StringComparison.OrdinalIgnoreCase);
+
         Console.Error.WriteLine(
-            $"serving on {bindAddress}, server_mode=raw, tp_min_threads={minThreads}, index={indexPath}, workers={workerCount}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, profile_legit_min_count={searchParams.ProfileLegitMinCount}, profile_fraud_min_count={searchParams.ProfileFraudMinCount}, exact_fallback={searchParams.ExactFallback}, risky_fallback_refs={index.RiskyFallbackCount}");
+            $"serving on {bindAddress}, server_mode={(asyncMode ? "raw-async" : "raw")}, tp_min_threads={minThreads}, index={indexPath}, workers={workerCount}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, profile_legit_min_count={searchParams.ProfileLegitMinCount}, profile_fraud_min_count={searchParams.ProfileFraudMinCount}, exact_fallback={searchParams.ExactFallback}, risky_fallback_refs={index.RiskyFallbackCount}");
 
         for (var i = 0; i < workerCount; i++)
         {
-            var thread = new Thread(() => AcceptLoop(listener, index, searchParams, keepAliveRequests, keepAliveIdleMs))
+            var thread = new Thread(
+                asyncMode
+                    ? () => AcceptLoopAsync(listener, index, searchParams, keepAliveRequests, keepAliveIdleMs).GetAwaiter().GetResult()
+                    : () => AcceptLoop(listener, index, searchParams, keepAliveRequests, keepAliveIdleMs))
             {
                 IsBackground = false,
                 Name = $"rinha-worker-{i}"
@@ -57,6 +73,92 @@ internal static class HttpServer
         }
 
         Thread.Sleep(Timeout.Infinite);
+    }
+
+    private static async Task AcceptLoopAsync(Socket listener, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs)
+    {
+        while (true)
+        {
+            Socket? socket = null;
+            try
+            {
+                socket = await listener.AcceptAsync();
+                ConfigureAcceptedSocket(socket, keepAliveIdleMs);
+                _ = HandleConnectionAsync(socket, index, searchParams, keepAliveRequests);
+                socket = null;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"async connection error: {ex.Message}");
+            }
+            finally
+            {
+                try
+                {
+                    socket?.Dispose();
+                }
+                catch
+                {
+                }
+            }
+        }
+    }
+
+    private static async Task HandleConnectionAsync(Socket socket, BinaryIndex index, SearchParams searchParams, int keepAliveRequests)
+    {
+        using var accepted = socket;
+        var buffer = ArrayPool<byte>.Shared.Rent(Constants.MaxRequestBytes);
+        try
+        {
+            var used = 0;
+            var handled = 0;
+            while (true)
+            {
+                int headerEnd;
+                int contentLength;
+                while (!RequestComplete(buffer, used, out headerEnd, out contentLength))
+                {
+                    if (used >= buffer.Length)
+                    {
+                        await SendAsync(accepted, DefaultResponseBytes);
+                        return;
+                    }
+
+                    int read;
+                    try
+                    {
+                        read = await accepted.ReceiveAsync(buffer.AsMemory(used, buffer.Length - used), SocketFlags.None);
+                    }
+                    catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
+                    {
+                        return;
+                    }
+
+                    if (read <= 0)
+                    {
+                        return;
+                    }
+
+                    used += read;
+                }
+
+                await SendAsync(accepted, SelectResponse(buffer, used, headerEnd, contentLength, index, searchParams));
+                handled++;
+                if (keepAliveRequests > 0 && handled >= keepAliveRequests)
+                {
+                    return;
+                }
+
+                used = 0;
+            }
+        }
+        catch
+        {
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private static void AcceptLoop(Socket listener, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs)
@@ -227,6 +329,11 @@ internal static class HttpServer
         return bytes.Length >= headerEnd + 4 + contentLength;
     }
 
+    private static bool RequestComplete(byte[] buffer, int used, out int headerEnd, out int contentLength)
+    {
+        return RequestComplete(buffer.AsSpan(0, used), out headerEnd, out contentLength);
+    }
+
     private static int ContentLength(ReadOnlySpan<byte> headers)
     {
         var pos = 0;
@@ -305,6 +412,54 @@ internal static class HttpServer
         }
     }
 
+    [SkipLocalsInit]
+    private static ReadOnlyMemory<byte> SelectResponse(
+        byte[] buffer,
+        int used,
+        int headerEnd,
+        int contentLength,
+        BinaryIndex index,
+        SearchParams searchParams)
+    {
+        var request = buffer.AsSpan(0, used);
+        if (request.StartsWith("GET /ready "u8) || request.StartsWith("GET /ready?"u8))
+        {
+            return ReadyResponseBytes;
+        }
+
+        if (!request.StartsWith("POST /fraud-score "u8) && !request.StartsWith("POST /fraud-score?"u8))
+        {
+            return NotFoundResponseBytes;
+        }
+
+        try
+        {
+            var bodyStart = headerEnd + 4;
+            var bodyEnd = Math.Min(bodyStart + contentLength, request.Length);
+            var body = request[bodyStart..bodyEnd];
+            Span<short> query = stackalloc short[Constants.Dim];
+            if (!QueryBuilder.TryBuildQuery(body, query))
+            {
+                return DefaultResponseBytes;
+            }
+
+            var fraudCount = index.ClassifyFraudCount(query, searchParams);
+            return fraudCount switch
+            {
+                <= 0 => Approved00ResponseBytes,
+                1 => Approved02ResponseBytes,
+                2 => Approved04ResponseBytes,
+                3 => Denied06ResponseBytes,
+                4 => Denied08ResponseBytes,
+                _ => Denied10ResponseBytes
+            };
+        }
+        catch
+        {
+            return DefaultResponseBytes;
+        }
+    }
+
     private static void Send(Socket socket, ReadOnlySpan<byte> response)
     {
         while (!response.IsEmpty)
@@ -313,6 +468,33 @@ internal static class HttpServer
             try
             {
                 sent = socket.Send(response);
+            }
+            catch (SocketException)
+            {
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            if (sent <= 0)
+            {
+                return;
+            }
+
+            response = response[sent..];
+        }
+    }
+
+    private static async ValueTask SendAsync(Socket socket, ReadOnlyMemory<byte> response)
+    {
+        while (!response.IsEmpty)
+        {
+            int sent;
+            try
+            {
+                sent = await socket.SendAsync(response, SocketFlags.None);
             }
             catch (SocketException)
             {

@@ -110,7 +110,9 @@ internal static class HttpServer
             var handled = 0;
             while (true)
             {
-                while (!RequestComplete(buffer.AsSpan(0, used), out _, out _))
+                int headerEnd;
+                int contentLength;
+                while (!RequestComplete(buffer.AsSpan(0, used), out headerEnd, out contentLength))
                 {
                     if (used >= buffer.Length)
                     {
@@ -136,7 +138,7 @@ internal static class HttpServer
                     used += read;
                 }
 
-                HandleRequest(socket, buffer.AsSpan(0, used), index, searchParams);
+                HandleRequest(socket, buffer.AsSpan(0, used), headerEnd, contentLength, index, searchParams);
                 handled++;
                 if (keepAliveRequests > 0 && handled >= keepAliveRequests)
                 {
@@ -171,7 +173,13 @@ internal static class HttpServer
         public int KeepAliveRequests { get; }
     }
 
-    private static void HandleRequest(Socket socket, ReadOnlySpan<byte> request, BinaryIndex index, SearchParams searchParams)
+    private static void HandleRequest(
+        Socket socket,
+        ReadOnlySpan<byte> request,
+        int headerEnd,
+        int contentLength,
+        BinaryIndex index,
+        SearchParams searchParams)
     {
         if (request.StartsWith("GET /ready "u8) || request.StartsWith("GET /ready?"u8))
         {
@@ -187,12 +195,6 @@ internal static class HttpServer
 
         try
         {
-            if (!RequestComplete(request, out var headerEnd, out var contentLength))
-            {
-                Send(socket, DefaultResponse);
-                return;
-            }
-
             var bodyStart = headerEnd + 4;
             var bodyEnd = Math.Min(bodyStart + contentLength, request.Length);
             var body = request[bodyStart..bodyEnd];

@@ -284,6 +284,9 @@ static void process_proxy_event(int epoll_fd, fd_state_t *state, uint32_t events
         if (!close_connection && (events & EPOLLIN) && conn->c2b_len == 0) {
             if (fill_buffer(conn->client_fd, conn->c2b, &conn->c2b_len) < 0) {
                 close_connection = 1;
+            } else if (conn->c2b_len > conn->c2b_off &&
+                       flush_buffer(conn->backend_fd, conn->c2b, &conn->c2b_off, &conn->c2b_len) < 0) {
+                close_connection = 1;
             }
         }
 
@@ -299,6 +302,9 @@ static void process_proxy_event(int epoll_fd, fd_state_t *state, uint32_t events
 
         if (!close_connection && (events & EPOLLIN) && conn->b2c_len == 0) {
             if (fill_buffer(conn->backend_fd, conn->b2c, &conn->b2c_len) < 0) {
+                close_connection = 1;
+            } else if (conn->b2c_len > conn->b2c_off &&
+                       flush_buffer(conn->client_fd, conn->b2c, &conn->b2c_off, &conn->b2c_len) < 0) {
                 close_connection = 1;
             }
         }

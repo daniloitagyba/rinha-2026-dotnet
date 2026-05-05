@@ -25,7 +25,7 @@ services:
       BIND_ADDR: unix:/sockets/api1.sock
       INDEX_PATH: /app/data/references.idx
       SERVER_MODE: raw
-      TP_MIN_THREADS: "128"
+      TP_MIN_THREADS: "64"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
       MIN_CANDIDATES: "16150"
@@ -51,7 +51,7 @@ services:
       BIND_ADDR: unix:/sockets/api2.sock
       INDEX_PATH: /app/data/references.idx
       SERVER_MODE: raw
-      TP_MIN_THREADS: "128"
+      TP_MIN_THREADS: "64"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
       MIN_CANDIDATES: "16150"

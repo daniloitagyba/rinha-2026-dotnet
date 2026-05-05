@@ -34,7 +34,7 @@ COPY --from=builder /out/data /app/data
 
 ENV BIND_ADDR=0.0.0.0:8080
 ENV INDEX_PATH=/app/data/references.idx
-ENV SERVER_MODE=raw-async
+ENV SERVER_MODE=raw
 ENV TP_MIN_THREADS=64
 ENV WORKERS=2
 ENV EARLY_CANDIDATES=9800

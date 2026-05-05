@@ -8,13 +8,19 @@ services:
       - "9999:9999"
     volumes:
       - backend-sockets:/sockets
+    security_opt:
+      - seccomp=unconfined
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     depends_on:
       - api1
       - api2
     deploy:
       resources:
         limits:
-          cpus: "0.23"
+          cpus: "0.225"
           memory: "32MB"
 
   api1:
@@ -24,7 +30,7 @@ services:
     environment:
       BIND_ADDR: unix:/sockets/api1.sock
       INDEX_PATH: /app/data/references.idx
-      SERVER_MODE: raw-async
+      SERVER_MODE: raw
       TP_MIN_THREADS: "64"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
@@ -37,10 +43,16 @@ services:
       EXACT_FALLBACK: "risky"
     volumes:
       - backend-sockets:/sockets
+    security_opt:
+      - seccomp=unconfined
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     deploy:
       resources:
         limits:
-          cpus: "0.385"
+          cpus: "0.3875"
           memory: "156MB"
 
   api2:
@@ -50,7 +62,7 @@ services:
     environment:
       BIND_ADDR: unix:/sockets/api2.sock
       INDEX_PATH: /app/data/references.idx
-      SERVER_MODE: raw-async
+      SERVER_MODE: raw
       TP_MIN_THREADS: "64"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
@@ -63,11 +75,22 @@ services:
       EXACT_FALLBACK: "risky"
     volumes:
       - backend-sockets:/sockets
+    security_opt:
+      - seccomp=unconfined
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     deploy:
       resources:
         limits:
-          cpus: "0.385"
+          cpus: "0.3875"
           memory: "156MB"
 
 volumes:
   backend-sockets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=4m,mode=0777

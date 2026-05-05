@@ -1,5 +1,9 @@
 bin/
 obj/
+.vs/
+.vscode/
+TestResults/
+BenchmarkDotNet.Artifacts/
 AGENTS.md
 data/*.idx
 resources/references.json.gz
@@ -9,3 +13,16 @@ test/test-data.json
 test/dump*.jsonl
 test/errors*.json
 test/errors*.jsonl
+*.binlog
+*.trx
+*.etl
+*.trace
+*.speedscope.json
+*.prof
+*.tmp
+*.log
+*.user
+*.suo
+.env
+.env.*
+!.env.example

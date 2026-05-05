@@ -13,7 +13,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#define BUFFER_SIZE 8192
+#define BUFFER_SIZE 16384
 #define BACKEND_COUNT 2
 #define MAX_EVENTS 1024
 
@@ -122,22 +122,39 @@ static int flush_buffer(int fd, unsigned char *buffer, size_t *offset, size_t *l
     return 0;
 }
 
-static int fill_buffer(int fd, unsigned char *buffer, size_t *length) {
-    ssize_t got = recv(fd, buffer, BUFFER_SIZE, 0);
-    if (got > 0) {
-        *length = (size_t)got;
-        return 1;
-    }
+static int pump_direction(int src_fd, int dst_fd, unsigned char *buffer, size_t *offset, size_t *length) {
+    for (;;) {
+        if (*offset < *length) {
+            if (flush_buffer(dst_fd, buffer, offset, length) < 0) {
+                return -1;
+            }
 
-    if (got == 0) {
+            if (*offset < *length) {
+                return 0;
+            }
+        }
+
+        ssize_t got = recv(src_fd, buffer, BUFFER_SIZE, 0);
+        if (got > 0) {
+            *offset = 0;
+            *length = (size_t)got;
+            continue;
+        }
+
+        if (got == 0) {
+            return -1;
+        }
+
+        if (errno == EINTR) {
+            continue;
+        }
+
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return 0;
+        }
+
         return -1;
     }
-
-    if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
-        return 0;
-    }
-
-    return -1;
 }
 
 static void schedule_close(int epoll_fd, connection_t *conn) {
@@ -282,10 +299,7 @@ static void process_proxy_event(int epoll_fd, fd_state_t *state, uint32_t events
         }
 
         if (!close_connection && (events & EPOLLIN) && conn->c2b_len == 0) {
-            if (fill_buffer(conn->client_fd, conn->c2b, &conn->c2b_len) < 0) {
-                close_connection = 1;
-            } else if (conn->c2b_len > conn->c2b_off &&
-                       flush_buffer(conn->backend_fd, conn->c2b, &conn->c2b_off, &conn->c2b_len) < 0) {
+            if (pump_direction(conn->client_fd, conn->backend_fd, conn->c2b, &conn->c2b_off, &conn->c2b_len) < 0) {
                 close_connection = 1;
             }
         }
@@ -301,10 +315,7 @@ static void process_proxy_event(int epoll_fd, fd_state_t *state, uint32_t events
         }
 
         if (!close_connection && (events & EPOLLIN) && conn->b2c_len == 0) {
-            if (fill_buffer(conn->backend_fd, conn->b2c, &conn->b2c_len) < 0) {
-                close_connection = 1;
-            } else if (conn->b2c_len > conn->b2c_off &&
-                       flush_buffer(conn->client_fd, conn->b2c, &conn->b2c_off, &conn->b2c_len) < 0) {
+            if (pump_direction(conn->backend_fd, conn->client_fd, conn->b2c, &conn->b2c_off, &conn->b2c_len) < 0) {
                 close_connection = 1;
             }
         }

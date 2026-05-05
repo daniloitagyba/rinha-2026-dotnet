@@ -16,9 +16,6 @@ param(
     [string]$Workers = $env:WORKERS,
     [string]$ServerMode = $env:SERVER_MODE,
     [string]$ThreadPoolMinThreads = $env:TP_MIN_THREADS,
-    [string]$SocketIoQueues = $env:SOCKET_IO_QUEUES,
-    [string]$SocketInlineScheduling = $env:SOCKET_INLINE_SCHEDULING,
-    [string]$SocketWaitForData = $env:SOCKET_WAIT_FOR_DATA,
     [string]$KeepAliveRequests = $env:KEEP_ALIVE_REQUESTS,
     [string]$KeepAliveIdleMs = $env:KEEP_ALIVE_IDLE_MS,
     [string]$ApiCpu = $env:API_CPU,
@@ -84,9 +81,6 @@ $apiOverrides = [ordered]@{
     "WORKERS" = $Workers
     "SERVER_MODE" = $ServerMode
     "TP_MIN_THREADS" = $ThreadPoolMinThreads
-    "SOCKET_IO_QUEUES" = $SocketIoQueues
-    "SOCKET_INLINE_SCHEDULING" = $SocketInlineScheduling
-    "SOCKET_WAIT_FOR_DATA" = $SocketWaitForData
     "KEEP_ALIVE_REQUESTS" = $KeepAliveRequests
     "KEEP_ALIVE_IDLE_MS" = $KeepAliveIdleMs
 }
@@ -161,6 +155,12 @@ function Compose {
 }
 
 try {
+    try {
+        Compose "down" "--remove-orphans" "-v"
+    } catch {
+        Write-Warning $_
+    }
+
     if ($Pull -or $Mode -eq "submission") {
         Compose "pull"
     }
@@ -209,7 +209,7 @@ try {
 } finally {
     if (-not $KeepServices) {
         try {
-            Compose "down" "--remove-orphans"
+            Compose "down" "--remove-orphans" "-v"
         } catch {
             Write-Warning $_
         }

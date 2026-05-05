@@ -15,11 +15,15 @@ case "$RUNNER_PRESET" in
   default)
     ;;
   remote-ryzen)
-    API_CPU="${API_CPU:-0.301}"
-    LB_CPU="${LB_CPU:-0.121}"
+    API_CPU="${API_CPU:-0.300}"
+    LB_CPU="${LB_CPU:-0.110}"
+    ;;
+  remote-ryzen-hard)
+    API_CPU="${API_CPU:-0.300}"
+    LB_CPU="${LB_CPU:-0.108}"
     ;;
   *)
-    echo "RUNNER_PRESET must be default or remote-ryzen" >&2
+    echo "RUNNER_PRESET must be default, remote-ryzen or remote-ryzen-hard" >&2
     exit 2
     ;;
 esac

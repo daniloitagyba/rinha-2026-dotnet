@@ -1,7 +1,7 @@
 param(
     [ValidateSet("submission", "build")]
     [string]$Mode = "submission",
-    [ValidateSet("default", "remote-ryzen")]
+    [ValidateSet("default", "remote-ryzen", "remote-ryzen-hard")]
     [string]$RunnerPreset = "default",
     [string]$ProjectName = "rinha-local",
     [string]$K6Image = $env:K6_IMAGE,
@@ -39,11 +39,20 @@ if ([string]::IsNullOrWhiteSpace($K6Image)) {
 switch ($RunnerPreset) {
     "remote-ryzen" {
         if ([string]::IsNullOrWhiteSpace($ApiCpu)) {
-            $ApiCpu = "0.301"
+            $ApiCpu = "0.300"
         }
 
         if ([string]::IsNullOrWhiteSpace($LbCpu)) {
-            $LbCpu = "0.121"
+            $LbCpu = "0.110"
+        }
+    }
+    "remote-ryzen-hard" {
+        if ([string]::IsNullOrWhiteSpace($ApiCpu)) {
+            $ApiCpu = "0.300"
+        }
+
+        if ([string]::IsNullOrWhiteSpace($LbCpu)) {
+            $LbCpu = "0.108"
         }
     }
 }

@@ -13,6 +13,18 @@ param(
     [string]$ProfileLegitMinCount = $env:PROFILE_LEGIT_MIN_COUNT,
     [string]$ProfileFraudMinCount = $env:PROFILE_FRAUD_MIN_COUNT,
     [string]$ExactFallback = $env:EXACT_FALLBACK,
+    [string]$RiskyAmountMin = $env:RISKY_AMOUNT_MIN,
+    [string]$RiskyAmountMax = $env:RISKY_AMOUNT_MAX,
+    [string]$RiskyInstallmentsMin = $env:RISKY_INSTALLMENTS_MIN,
+    [string]$RiskyInstallmentsMax = $env:RISKY_INSTALLMENTS_MAX,
+    [string]$RiskyRatioMin = $env:RISKY_RATIO_MIN,
+    [string]$RiskyKmHomeMin = $env:RISKY_KM_HOME_MIN,
+    [string]$RiskyKmHomeMax = $env:RISKY_KM_HOME_MAX,
+    [string]$RiskyTx24hMin = $env:RISKY_TX24H_MIN,
+    [string]$RiskyTx24hMax = $env:RISKY_TX24H_MAX,
+    [string]$RiskyMerchantAvgMin = $env:RISKY_MERCHANT_AVG_MIN,
+    [string]$RiskyMerchantAvgMax = $env:RISKY_MERCHANT_AVG_MAX,
+    [string]$SocketsMount = $env:SOCKETS_MOUNT,
     [string]$Workers = $env:WORKERS,
     [string]$ServerMode = $env:SERVER_MODE,
     [string]$ThreadPoolMinThreads = $env:TP_MIN_THREADS,
@@ -22,6 +34,7 @@ param(
     [string]$ApiMemory = $env:API_MEMORY,
     [string]$LbCpu = $env:LB_CPU,
     [string]$LbMemory = $env:LB_MEMORY,
+    [string]$SubmissionComposeFile = $env:SUBMISSION_COMPOSE_FILE,
     [switch]$KeepServices,
     [switch]$RefreshData,
     [switch]$Pull
@@ -63,7 +76,18 @@ if ($RefreshData -or -not (Test-Path $testData)) {
 }
 
 if ($Mode -eq "submission") {
-    $composeFile = Join-Path $root "submission/docker-compose.yml"
+    if ([string]::IsNullOrWhiteSpace($SubmissionComposeFile)) {
+        $worktreeCompose = "C:\tmp\rinha-2026-submission\docker-compose.yml"
+        if (Test-Path $worktreeCompose) {
+            $SubmissionComposeFile = $worktreeCompose
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($SubmissionComposeFile)) {
+        $composeFile = Join-Path $root "submission/docker-compose.yml"
+    } else {
+        $composeFile = $SubmissionComposeFile
+    }
 } else {
     $composeFile = Join-Path $root "docker-compose.yml"
 }
@@ -78,6 +102,17 @@ $apiOverrides = [ordered]@{
     "PROFILE_LEGIT_MIN_COUNT" = $ProfileLegitMinCount
     "PROFILE_FRAUD_MIN_COUNT" = $ProfileFraudMinCount
     "EXACT_FALLBACK" = $ExactFallback
+    "RISKY_AMOUNT_MIN" = $RiskyAmountMin
+    "RISKY_AMOUNT_MAX" = $RiskyAmountMax
+    "RISKY_INSTALLMENTS_MIN" = $RiskyInstallmentsMin
+    "RISKY_INSTALLMENTS_MAX" = $RiskyInstallmentsMax
+    "RISKY_RATIO_MIN" = $RiskyRatioMin
+    "RISKY_KM_HOME_MIN" = $RiskyKmHomeMin
+    "RISKY_KM_HOME_MAX" = $RiskyKmHomeMax
+    "RISKY_TX24H_MIN" = $RiskyTx24hMin
+    "RISKY_TX24H_MAX" = $RiskyTx24hMax
+    "RISKY_MERCHANT_AVG_MIN" = $RiskyMerchantAvgMin
+    "RISKY_MERCHANT_AVG_MAX" = $RiskyMerchantAvgMax
     "WORKERS" = $Workers
     "SERVER_MODE" = $ServerMode
     "TP_MIN_THREADS" = $ThreadPoolMinThreads
@@ -90,6 +125,13 @@ foreach ($item in $apiOverrides.GetEnumerator()) {
     if (-not [string]::IsNullOrWhiteSpace($item.Value)) {
         $activeApiOverrides += $item
     }
+}
+
+$originalSocketsMount = $env:SOCKETS_MOUNT
+if ([string]::IsNullOrWhiteSpace($SocketsMount)) {
+    Remove-Item Env:SOCKETS_MOUNT -ErrorAction SilentlyContinue
+} else {
+    $env:SOCKETS_MOUNT = $SocketsMount
 }
 
 $hasResourceOverrides =
@@ -112,6 +154,14 @@ if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides) {
 
         if (-not [string]::IsNullOrWhiteSpace($LbMemory)) {
             $lines += "          memory: `"$LbMemory`""
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($SocketsMount)) {
+        foreach ($service in @("lb", "api1", "api2")) {
+            $lines += "  ${service}:"
+            $lines += "    volumes:"
+            $lines += "      - ${SocketsMount}"
         }
     }
 
@@ -217,5 +267,11 @@ try {
 
     if ($overrideFile -and (Test-Path $overrideFile)) {
         Remove-Item -Path $overrideFile -Force
+    }
+
+    if ($null -eq $originalSocketsMount) {
+        Remove-Item Env:SOCKETS_MOUNT -ErrorAction SilentlyContinue
+    } else {
+        $env:SOCKETS_MOUNT = $originalSocketsMount
     }
 }

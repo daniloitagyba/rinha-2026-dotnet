@@ -283,14 +283,14 @@ internal static class HttpServer
         BinaryIndex index,
         SearchParams searchParams)
     {
-        if (request.StartsWith("GET /ready "u8) || request.StartsWith("GET /ready?"u8))
-        {
-            Send(socket, ReadyResponse);
-            return;
-        }
-
         if (!request.StartsWith("POST /fraud-score "u8) && !request.StartsWith("POST /fraud-score?"u8))
         {
+            if (request.StartsWith("GET /ready "u8) || request.StartsWith("GET /ready?"u8))
+            {
+                Send(socket, ReadyResponse);
+                return;
+            }
+
             Send(socket, NotFoundResponse);
             return;
         }
@@ -298,8 +298,7 @@ internal static class HttpServer
         try
         {
             var bodyStart = headerEnd + 4;
-            var bodyEnd = Math.Min(bodyStart + contentLength, request.Length);
-            var body = request[bodyStart..bodyEnd];
+            var body = request.Slice(bodyStart, contentLength);
             Span<short> query = stackalloc short[Constants.Dim];
             if (!QueryBuilder.TryBuildQuery(body, query))
             {
@@ -422,21 +421,20 @@ internal static class HttpServer
         SearchParams searchParams)
     {
         var request = buffer.AsSpan(0, used);
-        if (request.StartsWith("GET /ready "u8) || request.StartsWith("GET /ready?"u8))
-        {
-            return ReadyResponseBytes;
-        }
-
         if (!request.StartsWith("POST /fraud-score "u8) && !request.StartsWith("POST /fraud-score?"u8))
         {
+            if (request.StartsWith("GET /ready "u8) || request.StartsWith("GET /ready?"u8))
+            {
+                return ReadyResponseBytes;
+            }
+
             return NotFoundResponseBytes;
         }
 
         try
         {
             var bodyStart = headerEnd + 4;
-            var bodyEnd = Math.Min(bodyStart + contentLength, request.Length);
-            var body = request[bodyStart..bodyEnd];
+            var body = request.Slice(bodyStart, contentLength);
             Span<short> query = stackalloc short[Constants.Dim];
             if (!QueryBuilder.TryBuildQuery(body, query))
             {

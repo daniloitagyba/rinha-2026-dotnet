@@ -2,14 +2,32 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+TEST_MOUNT="${TEST_MOUNT:-$ROOT/test}"
 MODE="${MODE:-submission}"
 RUNNER_PRESET="${RUNNER_PRESET:-default}"
 PROJECT_NAME="${PROJECT_NAME:-rinha-local}"
 K6_IMAGE="${K6_IMAGE:-grafana/k6:latest}"
+SUBMISSION_COMPOSE_FILE="${SUBMISSION_COMPOSE_FILE:-}"
 KEEP_SERVICES="${KEEP_SERVICES:-0}"
 REFRESH_DATA="${REFRESH_DATA:-0}"
 PULL="${PULL:-0}"
 OVERRIDE_FILE=""
+DOCKER_OS=""
+
+if command -v docker >/dev/null 2>&1; then
+  DOCKER_OS="$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || true)"
+fi
+
+if [ -z "${DOCKER_CONFIG:-}" ] && \
+   [ -n "$DOCKER_OS" ] && \
+   [ "$DOCKER_OS" != "Docker Desktop" ] && \
+   [ -f "$HOME/.docker/config.json" ] && \
+   grep -Eq '"credsStore"[[:space:]]*:[[:space:]]*"desktop\.exe"' "$HOME/.docker/config.json"; then
+  DOCKER_CONFIG="${TMPDIR:-/tmp}/docker-anon"
+  mkdir -p "$DOCKER_CONFIG"
+  printf '{"auths":{}}\n' > "$DOCKER_CONFIG/config.json"
+  export DOCKER_CONFIG
+fi
 
 case "$RUNNER_PRESET" in
   default)
@@ -29,12 +47,23 @@ case "$RUNNER_PRESET" in
 esac
 
 if [ "$MODE" = "submission" ]; then
-  COMPOSE_FILE="$ROOT/submission/docker-compose.yml"
+  if [ -n "$SUBMISSION_COMPOSE_FILE" ]; then
+    COMPOSE_FILE="$SUBMISSION_COMPOSE_FILE"
+  else
+    COMPOSE_FILE="$ROOT/submission/docker-compose.yml"
+  fi
 elif [ "$MODE" = "build" ]; then
   COMPOSE_FILE="$ROOT/docker-compose.yml"
 else
   echo "MODE must be submission or build" >&2
   exit 2
+fi
+
+if [ "$MODE" = "build" ] && \
+   [ -z "${COMPOSE_BAKE+x}" ] && \
+   [ -n "$DOCKER_OS" ] && \
+   [ "$DOCKER_OS" != "Docker Desktop" ]; then
+  export COMPOSE_BAKE=false
 fi
 
 if [ "$REFRESH_DATA" = "1" ] || [ ! -f "$ROOT/test/test-data.json" ]; then
@@ -68,6 +97,18 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${PROFILE_LEGIT_MIN_COUNT:-}" ] || \
    [ -n "${PROFILE_FRAUD_MIN_COUNT:-}" ] || \
    [ -n "${EXACT_FALLBACK:-}" ] || \
+   [ -n "${RISKY_AMOUNT_MIN:-}" ] || \
+   [ -n "${RISKY_AMOUNT_MAX:-}" ] || \
+   [ -n "${RISKY_INSTALLMENTS_MIN:-}" ] || \
+   [ -n "${RISKY_INSTALLMENTS_MAX:-}" ] || \
+   [ -n "${RISKY_RATIO_MIN:-}" ] || \
+   [ -n "${RISKY_KM_HOME_MIN:-}" ] || \
+   [ -n "${RISKY_KM_HOME_MAX:-}" ] || \
+   [ -n "${RISKY_TX24H_MIN:-}" ] || \
+   [ -n "${RISKY_TX24H_MAX:-}" ] || \
+   [ -n "${RISKY_MERCHANT_AVG_MIN:-}" ] || \
+   [ -n "${RISKY_MERCHANT_AVG_MAX:-}" ] || \
+   [ -n "${SOCKETS_MOUNT:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
    [ -n "${SERVER_MODE:-}" ] || \
    [ -n "${TP_MIN_THREADS:-}" ] || \
@@ -77,7 +118,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${API_MEMORY:-}" ] || \
    [ -n "${LB_CPU:-}" ] || \
    [ -n "${LB_MEMORY:-}" ]; then
-  OVERRIDE_FILE="${TMPDIR:-/tmp}/${PROJECT_NAME}.override.yml"
+  OVERRIDE_FILE="${OVERRIDE_FILE_PATH:-${TMPDIR:-/tmp}/${PROJECT_NAME}.override.yml}"
   {
     echo "services:"
     if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ]; then
@@ -87,6 +128,14 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       echo "        limits:"
       [ -n "${LB_CPU:-}" ] && echo "          cpus: \"$LB_CPU\""
       [ -n "${LB_MEMORY:-}" ] && echo "          memory: \"$LB_MEMORY\""
+    fi
+
+    if [ -n "${SOCKETS_MOUNT:-}" ]; then
+      for service in lb api1 api2; do
+        echo "  $service:"
+        echo "    volumes:"
+        echo "      - ${SOCKETS_MOUNT}"
+      done
     fi
 
     for service in api1 api2; do
@@ -100,6 +149,17 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${PROFILE_LEGIT_MIN_COUNT:-}" ] && echo "      PROFILE_LEGIT_MIN_COUNT: \"$PROFILE_LEGIT_MIN_COUNT\""
       [ -n "${PROFILE_FRAUD_MIN_COUNT:-}" ] && echo "      PROFILE_FRAUD_MIN_COUNT: \"$PROFILE_FRAUD_MIN_COUNT\""
       [ -n "${EXACT_FALLBACK:-}" ] && echo "      EXACT_FALLBACK: \"$EXACT_FALLBACK\""
+      [ -n "${RISKY_AMOUNT_MIN:-}" ] && echo "      RISKY_AMOUNT_MIN: \"$RISKY_AMOUNT_MIN\""
+      [ -n "${RISKY_AMOUNT_MAX:-}" ] && echo "      RISKY_AMOUNT_MAX: \"$RISKY_AMOUNT_MAX\""
+      [ -n "${RISKY_INSTALLMENTS_MIN:-}" ] && echo "      RISKY_INSTALLMENTS_MIN: \"$RISKY_INSTALLMENTS_MIN\""
+      [ -n "${RISKY_INSTALLMENTS_MAX:-}" ] && echo "      RISKY_INSTALLMENTS_MAX: \"$RISKY_INSTALLMENTS_MAX\""
+      [ -n "${RISKY_RATIO_MIN:-}" ] && echo "      RISKY_RATIO_MIN: \"$RISKY_RATIO_MIN\""
+      [ -n "${RISKY_KM_HOME_MIN:-}" ] && echo "      RISKY_KM_HOME_MIN: \"$RISKY_KM_HOME_MIN\""
+      [ -n "${RISKY_KM_HOME_MAX:-}" ] && echo "      RISKY_KM_HOME_MAX: \"$RISKY_KM_HOME_MAX\""
+      [ -n "${RISKY_TX24H_MIN:-}" ] && echo "      RISKY_TX24H_MIN: \"$RISKY_TX24H_MIN\""
+      [ -n "${RISKY_TX24H_MAX:-}" ] && echo "      RISKY_TX24H_MAX: \"$RISKY_TX24H_MAX\""
+      [ -n "${RISKY_MERCHANT_AVG_MIN:-}" ] && echo "      RISKY_MERCHANT_AVG_MIN: \"$RISKY_MERCHANT_AVG_MIN\""
+      [ -n "${RISKY_MERCHANT_AVG_MAX:-}" ] && echo "      RISKY_MERCHANT_AVG_MAX: \"$RISKY_MERCHANT_AVG_MAX\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
       [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""
       [ -n "${TP_MIN_THREADS:-}" ] && echo "      TP_MIN_THREADS: \"$TP_MIN_THREADS\""
@@ -154,5 +214,5 @@ docker run --rm \
   -e PRE_ALLOCATED_VUS \
   -e MAX_VUS \
   -e REQUEST_TIMEOUT \
-  -v "$ROOT/test:/scripts" \
+  -v "$TEST_MOUNT:/scripts" \
   "$K6_IMAGE" run /scripts/rinha-test.js

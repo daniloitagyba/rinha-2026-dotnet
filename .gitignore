@@ -4,6 +4,7 @@ obj/
 .vscode/
 TestResults/
 BenchmarkDotNet.Artifacts/
+.bench-sockets/
 AGENTS.md
 data/*.idx
 resources/references.json.gz

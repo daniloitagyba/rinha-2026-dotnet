@@ -4,6 +4,7 @@
 .github/
 .vs/
 .vscode/
+.bench-sockets/
 .gitignore
 AGENTS.md
 README.md
@@ -21,6 +22,7 @@ test/errors*.jsonl
 results/
 BenchmarkDotNet.Artifacts/
 TestResults/
+data/*.idx
 data/references-*.idx
 *.binlog
 *.trx

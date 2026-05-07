@@ -66,6 +66,10 @@ if [ "$MODE" = "build" ] && \
   export COMPOSE_BAKE=false
 fi
 
+if [ "$MODE" = "build" ] && [ -z "${COMPOSE_PARALLEL_LIMIT:-}" ]; then
+  export COMPOSE_PARALLEL_LIMIT=1
+fi
+
 if [ "$REFRESH_DATA" = "1" ] || [ ! -f "$ROOT/test/test-data.json" ]; then
   FORCE="$REFRESH_DATA" sh "$ROOT/scripts/sync-official-data.sh"
 fi

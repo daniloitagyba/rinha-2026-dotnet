@@ -92,6 +92,11 @@ if ($Mode -eq "submission") {
     $composeFile = Join-Path $root "docker-compose.yml"
 }
 
+$originalComposeParallelLimit = $env:COMPOSE_PARALLEL_LIMIT
+if ($Mode -eq "build" -and [string]::IsNullOrWhiteSpace($env:COMPOSE_PARALLEL_LIMIT)) {
+    $env:COMPOSE_PARALLEL_LIMIT = "1"
+}
+
 $overrideFile = $null
 $apiOverrides = [ordered]@{
     "EARLY_CANDIDATES" = $EarlyCandidates
@@ -273,5 +278,11 @@ try {
         Remove-Item Env:SOCKETS_MOUNT -ErrorAction SilentlyContinue
     } else {
         $env:SOCKETS_MOUNT = $originalSocketsMount
+    }
+
+    if ($null -eq $originalComposeParallelLimit) {
+        Remove-Item Env:COMPOSE_PARALLEL_LIMIT -ErrorAction SilentlyContinue
+    } else {
+        $env:COMPOSE_PARALLEL_LIMIT = $originalComposeParallelLimit
     }
 }

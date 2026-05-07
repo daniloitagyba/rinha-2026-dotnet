@@ -3,6 +3,7 @@ namespace RinhaFraud;
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.CompilerServices;
@@ -273,6 +274,135 @@ CandidateSearchDone:
     }
 
     [SkipLocalsInit]
+    public ClassificationDiagnostics ClassifyFraudCountWithDiagnostics(ReadOnlySpan<short> query, in SearchParams searchParams)
+    {
+        var started = Stopwatch.GetTimestamp();
+        var profileKey = ProfileKey(query);
+        var primaryBucket = Vectorizer.BucketKey(query);
+
+        if (TryProfileFastDecision(query, searchParams, out var fastFraudCount))
+        {
+            return Diagnostic(
+                fastFraudCount,
+                ClassificationPath.ProfileFastPath,
+                profileKey,
+                primaryBucket,
+                candidates: 0,
+                fallbackCandidates: 0,
+                started);
+        }
+
+        if (searchParams.Flat || searchParams.ExactFallback == SearchParams.ExactFallbackProfileMiss)
+        {
+            var flatFrauds = ClassifyFlat(query);
+            return Diagnostic(
+                flatFrauds,
+                ClassificationPath.FullFlatFallback,
+                profileKey,
+                primaryBucket,
+                candidates: 0,
+                fallbackCandidates: _count,
+                started);
+        }
+
+        Span<long> topDist = stackalloc long[Constants.K];
+        Span<byte> topLabel = stackalloc byte[Constants.K];
+        topDist.Fill(long.MaxValue);
+
+        var candidates = 0;
+        var neighborKeys = Vectorizer.NeighborKeyOrderFor(query);
+        for (var neighborIndex = 0; neighborIndex < neighborKeys.Length; neighborIndex++)
+        {
+            var key = neighborKeys[neighborIndex];
+            var start = BucketOffset(key);
+            var end = BucketOffset(key + 1);
+            for (var itemPos = start; itemPos < end; itemPos++)
+            {
+                var id = BucketItem(itemPos);
+                Consider(id, query, topDist, topLabel);
+                candidates++;
+                if (candidates >= searchParams.MaxCandidates)
+                {
+                    goto CandidateSearchDone;
+                }
+            }
+
+            if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel))
+            {
+                goto CandidateSearchDone;
+            }
+
+            if (candidates >= searchParams.MinCandidates)
+            {
+                goto CandidateSearchDone;
+            }
+        }
+
+CandidateSearchDone:
+        if (candidates < Constants.K)
+        {
+            var flatFrauds = ClassifyFlat(query);
+            return Diagnostic(
+                flatFrauds,
+                ClassificationPath.FullFlatFallback,
+                profileKey,
+                primaryBucket,
+                candidates,
+                _count,
+                started);
+        }
+
+        var frauds = CountFrauds(topLabel);
+        if (searchParams.ExactFallback == SearchParams.ExactFallbackRisky &&
+            TryRiskyDirectDecision(query, frauds, out var directFrauds))
+        {
+            return Diagnostic(
+                directFrauds,
+                ClassificationPath.RiskyDirect,
+                profileKey,
+                primaryBucket,
+                candidates,
+                fallbackCandidates: 0,
+                started);
+        }
+
+        if (!ShouldUseExactFallback(query, frauds, searchParams))
+        {
+            return Diagnostic(
+                frauds,
+                ClassificationPath.AnnBuckets,
+                profileKey,
+                primaryBucket,
+                candidates,
+                fallbackCandidates: 0,
+                started);
+        }
+
+        if (searchParams.ExactFallback == SearchParams.ExactFallbackRisky)
+        {
+            var riskyFrauds = ClassifyRiskyFlatForDiagnostics(query, allowFullTiebreak: true, out var usedFullFlat, out var fallbackCandidates);
+            return Diagnostic(
+                riskyFrauds,
+                usedFullFlat ? ClassificationPath.FullFlatFallback : ClassificationPath.RiskyFlatFallback,
+                profileKey,
+                primaryBucket,
+                candidates,
+                fallbackCandidates,
+                started);
+        }
+
+        var fallbackFrauds = ClassifyFlat(query);
+        return Diagnostic(
+            fallbackFrauds,
+            ClassificationPath.FullFlatFallback,
+            profileKey,
+            primaryBucket,
+            candidates,
+            _count,
+            started);
+    }
+
+    [SkipLocalsInit]
     private int ClassifyFlat(ReadOnlySpan<short> query)
     {
         Span<long> topDist = stackalloc long[Constants.K];
@@ -306,6 +436,57 @@ CandidateSearchDone:
 
         var frauds = CountFrauds(topLabel);
         return allowFullTiebreak && NeedsFullRiskyTiebreak(query, frauds) ? ClassifyFlat(query) : frauds;
+    }
+
+    [SkipLocalsInit]
+    private int ClassifyRiskyFlatForDiagnostics(ReadOnlySpan<short> query, bool allowFullTiebreak, out bool usedFullFlat, out int fallbackCandidates)
+    {
+        usedFullFlat = false;
+        if (_riskyFallbackIds.Length < Constants.K)
+        {
+            usedFullFlat = true;
+            fallbackCandidates = _count;
+            return ClassifyFlat(query);
+        }
+
+        Span<long> topDist = stackalloc long[Constants.K];
+        Span<byte> topLabel = stackalloc byte[Constants.K];
+        topDist.Fill(long.MaxValue);
+
+        foreach (var id in _riskyFallbackIds)
+        {
+            Consider(id, query, topDist, topLabel);
+        }
+
+        fallbackCandidates = _riskyFallbackIds.Length;
+        var frauds = CountFrauds(topLabel);
+        if (allowFullTiebreak && NeedsFullRiskyTiebreak(query, frauds))
+        {
+            usedFullFlat = true;
+            fallbackCandidates += _count;
+            return ClassifyFlat(query);
+        }
+
+        return frauds;
+    }
+
+    private static ClassificationDiagnostics Diagnostic(
+        int fraudCount,
+        ClassificationPath path,
+        int profileKey,
+        int primaryBucket,
+        int candidates,
+        int fallbackCandidates,
+        long started)
+    {
+        return new ClassificationDiagnostics(
+            fraudCount,
+            path,
+            profileKey,
+            primaryBucket,
+            candidates,
+            fallbackCandidates,
+            Stopwatch.GetTimestamp() - started);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

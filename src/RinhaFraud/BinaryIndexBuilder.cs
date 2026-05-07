@@ -20,17 +20,12 @@ internal static class BinaryIndexBuilder
             Directory.CreateDirectory(directory);
         }
 
-        using var output = new FileStream(outputPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 1 << 20);
-        Span<byte> header = stackalloc byte[HeaderLength];
-        output.Write(header);
-        var vectorsOffset = output.Position;
-
+        var vectors = new List<short>(3_000_000 * Constants.Dim);
         var labels = new List<byte>(3_000_000);
         var keys = new List<ushort>(3_000_000);
         Span<uint> bucketCounts = stackalloc uint[Constants.BucketCount];
         var scanner = new JsonScanner(input);
         Span<short> vector = stackalloc short[Constants.Dim];
-        Span<byte> twoBytes = stackalloc byte[2];
 
         while (scanner.Find("\"vector\""u8))
         {
@@ -50,8 +45,7 @@ internal static class BinaryIndexBuilder
 
             for (var i = 0; i < Constants.Dim; i++)
             {
-                BinaryPrimitives.WriteInt16LittleEndian(twoBytes, vector[i]);
-                output.Write(twoBytes);
+                vectors.Add(vector[i]);
             }
 
             labels.Add(label);
@@ -79,8 +73,29 @@ internal static class BinaryIndexBuilder
             items[(int)itemPos] = (uint)id;
         }
 
+        using var output = new FileStream(outputPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 1 << 20);
+        Span<byte> header = stackalloc byte[HeaderLength];
+        output.Write(header);
+        var vectorsOffset = output.Position;
+        Span<byte> twoBytes = stackalloc byte[2];
+        var vectorSpan = CollectionsMarshal.AsSpan(vectors);
+        var labelSpan = CollectionsMarshal.AsSpan(labels);
+
+        foreach (var originalId in items)
+        {
+            var vectorStart = checked((int)originalId * Constants.Dim);
+            for (var dim = 0; dim < Constants.Dim; dim++)
+            {
+                BinaryPrimitives.WriteInt16LittleEndian(twoBytes, vectorSpan[vectorStart + dim]);
+                output.Write(twoBytes);
+            }
+        }
+
         var labelsOffset = output.Position;
-        output.Write(CollectionsMarshal.AsSpan(labels));
+        foreach (var originalId in items)
+        {
+            output.WriteByte(labelSpan[(int)originalId]);
+        }
 
         var bucketOffsetsOffset = output.Position;
         Span<byte> fourBytes = stackalloc byte[4];
@@ -91,9 +106,9 @@ internal static class BinaryIndexBuilder
         }
 
         var bucketItemsOffset = output.Position;
-        foreach (var value in items)
+        for (uint id = 0; id < labels.Count; id++)
         {
-            BinaryPrimitives.WriteUInt32LittleEndian(fourBytes, value);
+            BinaryPrimitives.WriteUInt32LittleEndian(fourBytes, id);
             output.Write(fourBytes);
         }
 

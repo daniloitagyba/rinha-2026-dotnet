@@ -1,6 +1,6 @@
 services:
   lb:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:16ff168960b029af6b996faea900192dd69f4219
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:1a305c4e1ee32d18942f15ca508b916d7966adf4
     platform: linux/amd64
     entrypoint: ["rinha-lb"]
     ports:
@@ -23,7 +23,7 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:16ff168960b029af6b996faea900192dd69f4219
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:1a305c4e1ee32d18942f15ca508b916d7966adf4
     platform: linux/amd64
     environment:
       BIND_ADDR: unix:/sockets/api1.sock
@@ -54,7 +54,7 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:16ff168960b029af6b996faea900192dd69f4219
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:1a305c4e1ee32d18942f15ca508b916d7966adf4
     platform: linux/amd64
     environment:
       BIND_ADDR: unix:/sockets/api2.sock

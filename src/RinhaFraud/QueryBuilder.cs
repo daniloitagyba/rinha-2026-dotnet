@@ -584,19 +584,6 @@ internal static class QueryBuilder
 
         pos++;
         start = pos;
-        var remaining = source[pos..];
-        var quoteOffset = remaining.IndexOf((byte)'"');
-        if (quoteOffset >= 0)
-        {
-            var candidate = remaining[..quoteOffset];
-            if (candidate.IndexOf((byte)'\\') < 0)
-            {
-                length = quoteOffset;
-                pos += quoteOffset + 1;
-                return true;
-            }
-        }
-
         var escaped = false;
         while ((uint)pos < (uint)source.Length)
         {
@@ -867,25 +854,14 @@ internal static class QueryBuilder
             return false;
         }
 
-        var searchStart = 0;
-        while (searchStart < haystack.Length)
+        for (var pos = 0; pos + needle.Length + 2 <= haystack.Length; pos++)
         {
-            var relative = haystack[searchStart..].IndexOf(needle);
-            if (relative < 0)
-            {
-                return false;
-            }
-
-            var pos = searchStart + relative;
-            if (pos > 0 &&
-                pos + needle.Length < haystack.Length &&
-                haystack[pos - 1] == (byte)'"' &&
-                haystack[pos + needle.Length] == (byte)'"')
+            if (haystack[pos] == (byte)'"' &&
+                haystack[(pos + 1)..(pos + 1 + needle.Length)].SequenceEqual(needle) &&
+                haystack[pos + 1 + needle.Length] == (byte)'"')
             {
                 return true;
             }
-
-            searchStart = pos + 1;
         }
 
         return false;

@@ -1,7 +1,6 @@
 namespace RinhaFraud;
 
 using System;
-using System.Buffers.Binary;
 
 internal static class Vectorizer
 {
@@ -243,24 +242,16 @@ internal static class Vectorizer
 
     private static double MccRisk(ReadOnlySpan<byte> mcc)
     {
-        if (mcc.Length == 4)
-        {
-            return BinaryPrimitives.ReadUInt32BigEndian(mcc) switch
-            {
-                0x35343131u => 0.15, // 5411
-                0x35383132u => 0.30, // 5812
-                0x35393132u => 0.20, // 5912
-                0x35393434u => 0.45, // 5944
-                0x37383031u => 0.80, // 7801
-                0x37383032u => 0.75, // 7802
-                0x37393935u => 0.85, // 7995
-                0x34353131u => 0.35, // 4511
-                0x35333131u => 0.25, // 5311
-                0x35393939u => 0.50, // 5999
-                _ => 0.50
-            };
-        }
-
+        if (mcc.SequenceEqual("5411"u8)) return 0.15;
+        if (mcc.SequenceEqual("5812"u8)) return 0.30;
+        if (mcc.SequenceEqual("5912"u8)) return 0.20;
+        if (mcc.SequenceEqual("5944"u8)) return 0.45;
+        if (mcc.SequenceEqual("7801"u8)) return 0.80;
+        if (mcc.SequenceEqual("7802"u8)) return 0.75;
+        if (mcc.SequenceEqual("7995"u8)) return 0.85;
+        if (mcc.SequenceEqual("4511"u8)) return 0.35;
+        if (mcc.SequenceEqual("5311"u8)) return 0.25;
+        if (mcc.SequenceEqual("5999"u8)) return 0.50;
         return 0.50;
     }
 

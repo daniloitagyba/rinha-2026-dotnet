@@ -11,6 +11,9 @@ using System.Threading.Tasks;
 
 internal static class HttpServer
 {
+    [ThreadStatic]
+    private static byte[]? s_syncRequestBuffer;
+
     private static readonly byte[] ReadyResponseBytes = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nOK"u8.ToArray();
     private static readonly byte[] NotFoundResponseBytes = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nnot found"u8.ToArray();
     private static readonly byte[] DefaultResponseBytes = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.0}"u8.ToArray();
@@ -205,54 +208,53 @@ internal static class HttpServer
 
     private static void HandleConnection(Socket socket, BinaryIndex index, SearchParams searchParams, int keepAliveRequests)
     {
-        var buffer = ArrayPool<byte>.Shared.Rent(Constants.MaxRequestBytes);
-        try
+        var buffer = s_syncRequestBuffer;
+        if (buffer is null || buffer.Length < Constants.MaxRequestBytes)
         {
-            var used = 0;
-            var handled = 0;
-            while (true)
+            buffer = new byte[Constants.MaxRequestBytes];
+            s_syncRequestBuffer = buffer;
+        }
+
+        var used = 0;
+        var handled = 0;
+        while (true)
+        {
+            int headerEnd;
+            int contentLength;
+            while (!RequestComplete(buffer.AsSpan(0, used), out headerEnd, out contentLength))
             {
-                int headerEnd;
-                int contentLength;
-                while (!RequestComplete(buffer.AsSpan(0, used), out headerEnd, out contentLength))
+                if (used >= buffer.Length)
                 {
-                    if (used >= buffer.Length)
-                    {
-                        Send(socket, DefaultResponse);
-                        return;
-                    }
-
-                    int read;
-                    try
-                    {
-                        read = socket.Receive(buffer.AsSpan(used, buffer.Length - used));
-                    }
-                    catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
-                    {
-                        return;
-                    }
-
-                    if (read <= 0)
-                    {
-                        return;
-                    }
-
-                    used += read;
+                    Send(socket, DefaultResponse);
+                    return;
                 }
 
-                HandleRequest(socket, buffer.AsSpan(0, used), headerEnd, contentLength, index, searchParams);
-                handled++;
-                if (keepAliveRequests > 0 && handled >= keepAliveRequests)
+                int read;
+                try
+                {
+                    read = socket.Receive(buffer.AsSpan(used, buffer.Length - used));
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
                 {
                     return;
                 }
 
-                used = 0;
+                if (read <= 0)
+                {
+                    return;
+                }
+
+                used += read;
             }
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
+
+            HandleRequest(socket, buffer.AsSpan(0, used), headerEnd, contentLength, index, searchParams);
+            handled++;
+            if (keepAliveRequests > 0 && handled >= keepAliveRequests)
+            {
+                return;
+            }
+
+            used = 0;
         }
     }
 
@@ -335,6 +337,19 @@ internal static class HttpServer
 
     private static int ContentLength(ReadOnlySpan<byte> headers)
     {
+        const int contentLengthPrefixLength = 17;
+        var marker = headers.IndexOf("\r\nContent-Length:"u8);
+        if (marker >= 0)
+        {
+            return ParsePositiveInt(headers[(marker + contentLengthPrefixLength)..]);
+        }
+
+        marker = headers.IndexOf("\r\ncontent-length:"u8);
+        if (marker >= 0)
+        {
+            return ParsePositiveInt(headers[(marker + contentLengthPrefixLength)..]);
+        }
+
         var pos = 0;
         while (pos < headers.Length)
         {

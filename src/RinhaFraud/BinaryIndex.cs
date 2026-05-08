@@ -25,7 +25,6 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly long _vectorsOffset;
     private readonly long _labelsOffset;
     private readonly long _bucketOffsetsOffset;
-    private readonly long _bucketItemsOffset;
     private readonly ushort[] _profileCounts;
     private readonly byte[] _profileLabelMasks;
     private readonly uint[] _riskyFallbackIds;
@@ -41,7 +40,6 @@ internal unsafe sealed class BinaryIndex : IDisposable
         long vectorsOffset,
         long labelsOffset,
         long bucketOffsetsOffset,
-        long bucketItemsOffset,
         ushort[] profileCounts,
         byte[] profileLabelMasks,
         uint[] riskyFallbackIds)
@@ -54,7 +52,6 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _vectorsOffset = vectorsOffset;
         _labelsOffset = labelsOffset;
         _bucketOffsetsOffset = bucketOffsetsOffset;
-        _bucketItemsOffset = bucketItemsOffset;
         _profileCounts = profileCounts;
         _profileLabelMasks = profileLabelMasks;
         _riskyFallbackIds = riskyFallbackIds;
@@ -132,7 +129,6 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 vectorsOffset,
                 labelsOffset,
                 bucketOffsetsOffset,
-                bucketItemsOffset,
                 profileCounts,
                 profileLabelMasks,
                 riskyFallbackIds);
@@ -184,8 +180,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var end = BucketOffset(key + 1);
             for (var itemPos = start; itemPos < end; itemPos++)
             {
-                var id = BucketItem(itemPos);
-                Consider(id, query, topDist, topLabel);
+                Consider(itemPos, query, topDist, topLabel);
                 candidates++;
                 if (candidates >= searchParams.MaxCandidates)
                 {
@@ -266,8 +261,7 @@ CandidateSearchDone:
             var end = BucketOffset(key + 1);
             for (var itemPos = start; itemPos < end; itemPos++)
             {
-                var id = BucketItem(itemPos);
-                Consider(id, query, topDist, topLabel);
+                Consider(itemPos, query, topDist, topLabel);
                 candidates++;
                 if (candidates >= searchParams.MaxCandidates)
                 {
@@ -713,12 +707,6 @@ CandidateSearchDone:
     private uint BucketOffset(int key)
     {
         return Unsafe.ReadUnaligned<uint>(_ptr + _bucketOffsetsOffset + key * 4L);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private uint BucketItem(uint pos)
-    {
-        return Unsafe.ReadUnaligned<uint>(_ptr + _bucketItemsOffset + pos * 4L);
     }
 
     private static void BuildProfileStats(

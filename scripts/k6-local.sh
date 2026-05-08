@@ -117,6 +117,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${RISKY_MERCHANT_AVG_MIN:-}" ] || \
    [ -n "${RISKY_MERCHANT_AVG_MAX:-}" ] || \
    [ -n "${RISKY_COMPACT:-}" ] || \
+   [ -n "${RISKY_FINE_BUCKETS:-}" ] || \
    [ -n "${RISKY_SIMD:-}" ] || \
    [ -n "${SOCKETS_MOUNT:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
@@ -171,6 +172,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${RISKY_MERCHANT_AVG_MIN:-}" ] && echo "      RISKY_MERCHANT_AVG_MIN: \"$RISKY_MERCHANT_AVG_MIN\""
       [ -n "${RISKY_MERCHANT_AVG_MAX:-}" ] && echo "      RISKY_MERCHANT_AVG_MAX: \"$RISKY_MERCHANT_AVG_MAX\""
       [ -n "${RISKY_COMPACT:-}" ] && echo "      RISKY_COMPACT: \"$RISKY_COMPACT\""
+      [ -n "${RISKY_FINE_BUCKETS:-}" ] && echo "      RISKY_FINE_BUCKETS: \"$RISKY_FINE_BUCKETS\""
       [ -n "${RISKY_SIMD:-}" ] && echo "      RISKY_SIMD: \"$RISKY_SIMD\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
       [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""

@@ -17,6 +17,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private const int HeaderLength = 80;
     private const int ProfileKeyCount = 1 << 22;
     private const int RiskyVectorStride = 16;
+    private const int RiskyFineExtraBits = 3;
+    private const int RiskyFineBucketCount = Constants.BucketCount << RiskyFineExtraBits;
     private const byte LegitMask = 1;
     private const byte FraudMask = 2;
 
@@ -34,7 +36,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly short[] _riskyFallbackVectors;
     private readonly byte[] _riskyFallbackLabels;
     private readonly int[] _riskyBucketOffsets;
+    private readonly int[] _riskyFineBucketOffsets;
+    private readonly int[] _riskyCoarseFineOffsets;
+    private readonly int[] _riskyFineKeys;
     private readonly bool _useRiskyBuckets;
+    private readonly bool _useRiskyFineBuckets;
     private readonly bool _useRiskyCompact;
     private readonly bool _useRiskySimd;
 
@@ -55,7 +61,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
         short[] riskyFallbackVectors,
         byte[] riskyFallbackLabels,
         int[] riskyBucketOffsets,
+        int[] riskyFineBucketOffsets,
+        int[] riskyCoarseFineOffsets,
+        int[] riskyFineKeys,
         bool useRiskyBuckets,
+        bool useRiskyFineBuckets,
         bool useRiskyCompact,
         bool useRiskySimd)
     {
@@ -73,7 +83,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _riskyFallbackVectors = riskyFallbackVectors;
         _riskyFallbackLabels = riskyFallbackLabels;
         _riskyBucketOffsets = riskyBucketOffsets;
+        _riskyFineBucketOffsets = riskyFineBucketOffsets;
+        _riskyCoarseFineOffsets = riskyCoarseFineOffsets;
+        _riskyFineKeys = riskyFineKeys;
         _useRiskyBuckets = useRiskyBuckets;
+        _useRiskyFineBuckets = useRiskyFineBuckets;
         _useRiskyCompact = useRiskyCompact;
         _useRiskySimd = useRiskySimd;
     }
@@ -150,8 +164,12 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 out var riskyFallbackIds,
                 out var riskyFallbackVectors,
                 out var riskyFallbackLabels,
-                out var riskyBucketOffsets);
+                out var riskyBucketOffsets,
+                out var riskyFineBucketOffsets,
+                out var riskyCoarseFineOffsets,
+                out var riskyFineKeys);
             var useRiskyBuckets = EnvBool("RISKY_BUCKETS", true);
+            var useRiskyFineBuckets = EnvBool("RISKY_FINE_BUCKETS", true);
             var useRiskySimd = EnvBool("RISKY_SIMD", true);
 
             return new BinaryIndex(
@@ -169,7 +187,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 riskyFallbackVectors,
                 riskyFallbackLabels,
                 riskyBucketOffsets,
+                riskyFineBucketOffsets,
+                riskyCoarseFineOffsets,
+                riskyFineKeys,
                 useRiskyBuckets,
+                useRiskyFineBuckets,
                 useRiskyCompact,
                 useRiskySimd);
         }
@@ -482,6 +504,17 @@ CandidateSearchDone:
         usedFullFlat = false;
         fallbackCandidates = 0;
 
+        if (_useRiskyFineBuckets)
+        {
+            return ClassifyRiskyFineBucketedFlat(
+                query,
+                topDist,
+                topLabel,
+                allowFullTiebreak,
+                out usedFullFlat,
+                out fallbackCandidates);
+        }
+
         var neighborKeys = Vectorizer.NeighborKeyOrderFor(query);
         for (var neighborIndex = 0; neighborIndex < neighborKeys.Length; neighborIndex++)
         {
@@ -508,6 +541,69 @@ CandidateSearchDone:
                 for (var pos = start; pos < end; pos++)
                 {
                     Consider(_riskyFallbackIds[pos], query, topDist, topLabel);
+                }
+            }
+        }
+
+        var frauds = CountFrauds(topLabel);
+        if (allowFullTiebreak && NeedsFullRiskyTiebreak(query, frauds))
+        {
+            usedFullFlat = true;
+            fallbackCandidates += _count;
+            return ClassifyFlat(query);
+        }
+
+        return frauds;
+    }
+
+    private int ClassifyRiskyFineBucketedFlat(
+        ReadOnlySpan<short> query,
+        Span<long> topDist,
+        Span<byte> topLabel,
+        bool allowFullTiebreak,
+        out bool usedFullFlat,
+        out int fallbackCandidates)
+    {
+        usedFullFlat = false;
+        fallbackCandidates = 0;
+
+        var neighborKeys = Vectorizer.NeighborKeyOrderFor(query);
+        for (var neighborIndex = 0; neighborIndex < neighborKeys.Length; neighborIndex++)
+        {
+            var coarseKey = neighborKeys[neighborIndex];
+            var fineStart = _riskyCoarseFineOffsets[coarseKey];
+            var fineEnd = _riskyCoarseFineOffsets[coarseKey + 1];
+            if (fineStart == fineEnd)
+            {
+                continue;
+            }
+
+            if (RiskyBucketLowerBound(coarseKey, query) >= topDist[Constants.K - 1])
+            {
+                continue;
+            }
+
+            for (var finePos = fineStart; finePos < fineEnd; finePos++)
+            {
+                var fineKey = _riskyFineKeys[finePos];
+                if (RiskyFineBucketLowerBound(fineKey, query) >= topDist[Constants.K - 1])
+                {
+                    continue;
+                }
+
+                var start = _riskyFineBucketOffsets[fineKey];
+                var end = _riskyFineBucketOffsets[fineKey + 1];
+                fallbackCandidates += end - start;
+                if (_useRiskyCompact)
+                {
+                    ConsiderRiskyCompactRange(query, start, end, topDist, topLabel);
+                }
+                else
+                {
+                    for (var pos = start; pos < end; pos++)
+                    {
+                        Consider(_riskyFallbackIds[pos], query, topDist, topLabel);
+                    }
                 }
             }
         }
@@ -1093,11 +1189,15 @@ CandidateSearchDone:
         out uint[] ids,
         out short[] vectors,
         out byte[] labels,
-        out int[] bucketOffsets)
+        out int[] bucketOffsets,
+        out int[] fineBucketOffsets,
+        out int[] coarseFineOffsets,
+        out int[] fineKeys)
     {
         var idList = new List<uint>(128_000);
-        var keyList = new List<ushort>(128_000);
+        var fineKeyList = new List<int>(128_000);
         Span<int> counts = stackalloc int[Constants.BucketCount];
+        var fineCounts = new int[RiskyFineBucketCount];
 
         for (uint id = 0; id < count; id++)
         {
@@ -1105,9 +1205,11 @@ CandidateSearchDone:
             if (IsRiskyFallbackReference(vector, in filter))
             {
                 var key = BucketKey(vector);
+                var fineKey = RiskyFineBucketKey(vector, key);
                 idList.Add(id);
-                keyList.Add(key);
+                fineKeyList.Add(fineKey);
                 counts[key]++;
+                fineCounts[fineKey]++;
             }
         }
 
@@ -1117,8 +1219,36 @@ CandidateSearchDone:
             bucketOffsets[i + 1] = bucketOffsets[i] + counts[i];
         }
 
-        var writePositions = new int[Constants.BucketCount];
-        bucketOffsets.AsSpan(0, Constants.BucketCount).CopyTo(writePositions);
+        fineBucketOffsets = new int[RiskyFineBucketCount + 1];
+        coarseFineOffsets = new int[Constants.BucketCount + 1];
+        for (var i = 0; i < RiskyFineBucketCount; i++)
+        {
+            fineBucketOffsets[i + 1] = fineBucketOffsets[i] + fineCounts[i];
+            if (fineCounts[i] != 0)
+            {
+                coarseFineOffsets[(i >> RiskyFineExtraBits) + 1]++;
+            }
+        }
+
+        for (var i = 0; i < Constants.BucketCount; i++)
+        {
+            coarseFineOffsets[i + 1] += coarseFineOffsets[i];
+        }
+
+        fineKeys = new int[coarseFineOffsets[Constants.BucketCount]];
+        var fineKeyPositions = new int[Constants.BucketCount];
+        coarseFineOffsets.AsSpan(0, Constants.BucketCount).CopyTo(fineKeyPositions);
+        for (var i = 0; i < RiskyFineBucketCount; i++)
+        {
+            if (fineCounts[i] != 0)
+            {
+                var coarse = i >> RiskyFineExtraBits;
+                fineKeys[fineKeyPositions[coarse]++] = i;
+            }
+        }
+
+        var writePositions = new int[RiskyFineBucketCount];
+        fineBucketOffsets.AsSpan(0, RiskyFineBucketCount).CopyTo(writePositions);
 
         if (buildCompact)
         {
@@ -1128,8 +1258,8 @@ CandidateSearchDone:
 
             for (var i = 0; i < idList.Count; i++)
             {
-                var key = keyList[i];
-                var writePosition = writePositions[key]++;
+                var fineKey = fineKeyList[i];
+                var writePosition = writePositions[fineKey]++;
                 var vector = ptr + vectorsOffset + idList[i] * Constants.Dim * 2L;
                 var vectorStart = writePosition * RiskyVectorStride;
                 for (var dim = 0; dim < Constants.Dim; dim++)
@@ -1149,8 +1279,8 @@ CandidateSearchDone:
 
         for (var i = 0; i < idList.Count; i++)
         {
-            var key = keyList[i];
-            ids[writePositions[key]++] = idList[i];
+            var fineKey = fineKeyList[i];
+            ids[writePositions[fineKey]++] = idList[i];
         }
     }
 
@@ -1199,6 +1329,14 @@ CandidateSearchDone:
         return (ushort)(amount | (ratio << 3) | (kmHome << 6) | (hour << 9) | (noLast << 11));
     }
 
+    private static int RiskyFineBucketKey(byte* vector, int coarseKey)
+    {
+        var extra = Unsafe.ReadUnaligned<short>(vector + 18) > 0 ? 1 : 0;
+        extra |= (Unsafe.ReadUnaligned<short>(vector + 20) > 0 ? 1 : 0) << 1;
+        extra |= (Unsafe.ReadUnaligned<short>(vector + 22) > 0 ? 1 : 0) << 2;
+        return (coarseKey << RiskyFineExtraBits) | extra;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static long RiskyBucketLowerBound(int key, ReadOnlySpan<short> query)
     {
@@ -1217,6 +1355,26 @@ CandidateSearchDone:
             ? RangeDistanceSquared(query[5], 0, Constants.Scale)
             : RangeDistanceSquared(query[5], -Constants.Scale, -Constants.Scale);
         return sum;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long RiskyFineBucketLowerBound(int fineKey, ReadOnlySpan<short> query)
+    {
+        var coarseKey = fineKey >> RiskyFineExtraBits;
+        var extra = fineKey & ((1 << RiskyFineExtraBits) - 1);
+
+        var sum = RiskyBucketLowerBound(coarseKey, query);
+        sum += BinaryDistanceSquared(query[9], extra & 1);
+        sum += BinaryDistanceSquared(query[10], (extra >> 1) & 1);
+        sum += BinaryDistanceSquared(query[11], (extra >> 2) & 1);
+        return sum;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long BinaryDistanceSquared(short value, int bit)
+    {
+        var exact = bit == 0 ? 0 : Constants.Scale;
+        return RangeDistanceSquared(value, exact, exact);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

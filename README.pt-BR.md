@@ -66,6 +66,7 @@ Variaveis principais das APIs:
 - `EARLY_CANDIDATES`, `MIN_CANDIDATES`, `MAX_CANDIDATES`: limites da busca
 - `PROFILE_FASTPATH`: habilita ou desabilita o fast path por perfil
 - `EXACT_FALLBACK`: modo do fallback exato
+- `RISKY_FINE_BUCKETS`: habilita sub-buckets booleanos no fallback de risco
 - `RISKY_SIMD`: habilita ou desabilita SIMD no fallback de risco
 
 ## Comandos

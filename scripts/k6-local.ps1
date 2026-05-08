@@ -25,6 +25,7 @@ param(
     [string]$RiskyMerchantAvgMin = $env:RISKY_MERCHANT_AVG_MIN,
     [string]$RiskyMerchantAvgMax = $env:RISKY_MERCHANT_AVG_MAX,
     [string]$RiskyCompact = $env:RISKY_COMPACT,
+    [string]$RiskyFineBuckets = $env:RISKY_FINE_BUCKETS,
     [string]$RiskySimd = $env:RISKY_SIMD,
     [string]$SocketsMount = $env:SOCKETS_MOUNT,
     [string]$Workers = $env:WORKERS,
@@ -121,6 +122,7 @@ $apiOverrides = [ordered]@{
     "RISKY_MERCHANT_AVG_MIN" = $RiskyMerchantAvgMin
     "RISKY_MERCHANT_AVG_MAX" = $RiskyMerchantAvgMax
     "RISKY_COMPACT" = $RiskyCompact
+    "RISKY_FINE_BUCKETS" = $RiskyFineBuckets
     "RISKY_SIMD" = $RiskySimd
     "WORKERS" = $Workers
     "SERVER_MODE" = $ServerMode

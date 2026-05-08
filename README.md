@@ -67,6 +67,7 @@ Main API environment variables:
 - `EARLY_CANDIDATES`, `MIN_CANDIDATES`, `MAX_CANDIDATES`: search limits
 - `PROFILE_FASTPATH`: enables or disables the profile fast path
 - `EXACT_FALLBACK`: exact fallback mode
+- `RISKY_FINE_BUCKETS`: enables boolean sub-buckets inside the risky fallback
 - `RISKY_SIMD`: enables or disables SIMD in the risky fallback
 
 ## Commands

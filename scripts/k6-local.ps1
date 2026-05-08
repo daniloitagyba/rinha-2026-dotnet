@@ -24,6 +24,8 @@ param(
     [string]$RiskyTx24hMax = $env:RISKY_TX24H_MAX,
     [string]$RiskyMerchantAvgMin = $env:RISKY_MERCHANT_AVG_MIN,
     [string]$RiskyMerchantAvgMax = $env:RISKY_MERCHANT_AVG_MAX,
+    [string]$RiskyCompact = $env:RISKY_COMPACT,
+    [string]$RiskySimd = $env:RISKY_SIMD,
     [string]$SocketsMount = $env:SOCKETS_MOUNT,
     [string]$Workers = $env:WORKERS,
     [string]$ServerMode = $env:SERVER_MODE,
@@ -118,6 +120,8 @@ $apiOverrides = [ordered]@{
     "RISKY_TX24H_MAX" = $RiskyTx24hMax
     "RISKY_MERCHANT_AVG_MIN" = $RiskyMerchantAvgMin
     "RISKY_MERCHANT_AVG_MAX" = $RiskyMerchantAvgMax
+    "RISKY_COMPACT" = $RiskyCompact
+    "RISKY_SIMD" = $RiskySimd
     "WORKERS" = $Workers
     "SERVER_MODE" = $ServerMode
     "TP_MIN_THREADS" = $ThreadPoolMinThreads

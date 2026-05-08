@@ -8,12 +8,15 @@ using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 
 internal unsafe sealed class BinaryIndex : IDisposable
 {
     private static ReadOnlySpan<byte> Magic => "RINHA26I"u8;
     private const int HeaderLength = 80;
     private const int ProfileKeyCount = 1 << 22;
+    private const int RiskyVectorStride = 16;
     private const byte LegitMask = 1;
     private const byte FraudMask = 2;
 
@@ -28,10 +31,14 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly ushort[] _profileCounts;
     private readonly byte[] _profileLabelMasks;
     private readonly uint[] _riskyFallbackIds;
+    private readonly short[] _riskyFallbackVectors;
+    private readonly byte[] _riskyFallbackLabels;
     private readonly int[] _riskyBucketOffsets;
     private readonly bool _useRiskyBuckets;
+    private readonly bool _useRiskyCompact;
+    private readonly bool _useRiskySimd;
 
-    public int RiskyFallbackCount => _riskyFallbackIds.Length;
+    public int RiskyFallbackCount => _useRiskyCompact ? _riskyFallbackLabels.Length : _riskyFallbackIds.Length;
 
     private BinaryIndex(
         MemoryMappedFile mappedFile,
@@ -45,8 +52,12 @@ internal unsafe sealed class BinaryIndex : IDisposable
         ushort[] profileCounts,
         byte[] profileLabelMasks,
         uint[] riskyFallbackIds,
+        short[] riskyFallbackVectors,
+        byte[] riskyFallbackLabels,
         int[] riskyBucketOffsets,
-        bool useRiskyBuckets)
+        bool useRiskyBuckets,
+        bool useRiskyCompact,
+        bool useRiskySimd)
     {
         _mappedFile = mappedFile;
         _accessor = accessor;
@@ -59,8 +70,12 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _profileCounts = profileCounts;
         _profileLabelMasks = profileLabelMasks;
         _riskyFallbackIds = riskyFallbackIds;
+        _riskyFallbackVectors = riskyFallbackVectors;
+        _riskyFallbackLabels = riskyFallbackLabels;
         _riskyBucketOffsets = riskyBucketOffsets;
         _useRiskyBuckets = useRiskyBuckets;
+        _useRiskyCompact = useRiskyCompact;
+        _useRiskySimd = useRiskySimd;
     }
 
     public static BinaryIndex Open(string path)
@@ -124,8 +139,20 @@ internal unsafe sealed class BinaryIndex : IDisposable
 
             BuildProfileStats(ptr, count, vectorsOffset, labelsOffset, out var profileCounts, out var profileLabelMasks);
             var riskyFallbackFilter = RiskyFallbackFilter.FromEnvironment();
-            BuildRiskyFallbackIndex(ptr, count, vectorsOffset, in riskyFallbackFilter, out var riskyFallbackIds, out var riskyBucketOffsets);
+            var useRiskyCompact = EnvBool("RISKY_COMPACT", true);
+            BuildRiskyFallbackIndex(
+                ptr,
+                count,
+                vectorsOffset,
+                labelsOffset,
+                in riskyFallbackFilter,
+                useRiskyCompact,
+                out var riskyFallbackIds,
+                out var riskyFallbackVectors,
+                out var riskyFallbackLabels,
+                out var riskyBucketOffsets);
             var useRiskyBuckets = EnvBool("RISKY_BUCKETS", true);
+            var useRiskySimd = EnvBool("RISKY_SIMD", true);
 
             return new BinaryIndex(
                 mappedFile,
@@ -139,8 +166,12 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 profileCounts,
                 profileLabelMasks,
                 riskyFallbackIds,
+                riskyFallbackVectors,
+                riskyFallbackLabels,
                 riskyBucketOffsets,
-                useRiskyBuckets);
+                useRiskyBuckets,
+                useRiskyCompact,
+                useRiskySimd);
         }
         catch
         {
@@ -358,7 +389,7 @@ CandidateSearchDone:
     [SkipLocalsInit]
     private int ClassifyRiskyFlat(ReadOnlySpan<short> query, bool allowFullTiebreak)
     {
-        if (_riskyFallbackIds.Length < Constants.K)
+        if (RiskyFallbackCount < Constants.K)
         {
             return ClassifyFlat(query);
         }
@@ -370,6 +401,13 @@ CandidateSearchDone:
         if (_useRiskyBuckets)
         {
             return ClassifyRiskyBucketedFlat(query, topDist, topLabel, allowFullTiebreak, out _, out _);
+        }
+
+        if (_useRiskyCompact)
+        {
+            ConsiderRiskyCompactRange(query, 0, _riskyFallbackLabels.Length, topDist, topLabel);
+            var compactFrauds = CountFrauds(topLabel);
+            return allowFullTiebreak && NeedsFullRiskyTiebreak(query, compactFrauds) ? ClassifyFlat(query) : compactFrauds;
         }
 
         foreach (var id in _riskyFallbackIds)
@@ -385,7 +423,7 @@ CandidateSearchDone:
     private int ClassifyRiskyFlatForDiagnostics(ReadOnlySpan<short> query, bool allowFullTiebreak, out bool usedFullFlat, out int fallbackCandidates)
     {
         usedFullFlat = false;
-        if (_riskyFallbackIds.Length < Constants.K)
+        if (RiskyFallbackCount < Constants.K)
         {
             usedFullFlat = true;
             fallbackCandidates = _count;
@@ -399,6 +437,21 @@ CandidateSearchDone:
         if (_useRiskyBuckets)
         {
             return ClassifyRiskyBucketedFlat(query, topDist, topLabel, allowFullTiebreak, out usedFullFlat, out fallbackCandidates);
+        }
+
+        if (_useRiskyCompact)
+        {
+            ConsiderRiskyCompactRange(query, 0, _riskyFallbackLabels.Length, topDist, topLabel);
+            fallbackCandidates = _riskyFallbackLabels.Length;
+            var compactFrauds = CountFrauds(topLabel);
+            if (allowFullTiebreak && NeedsFullRiskyTiebreak(query, compactFrauds))
+            {
+                usedFullFlat = true;
+                fallbackCandidates += _count;
+                return ClassifyFlat(query);
+            }
+
+            return compactFrauds;
         }
 
         foreach (var id in _riskyFallbackIds)
@@ -446,9 +499,16 @@ CandidateSearchDone:
             }
 
             fallbackCandidates += end - start;
-            for (var pos = start; pos < end; pos++)
+            if (_useRiskyCompact)
             {
-                Consider(_riskyFallbackIds[pos], query, topDist, topLabel);
+                ConsiderRiskyCompactRange(query, start, end, topDist, topLabel);
+            }
+            else
+            {
+                for (var pos = start; pos < end; pos++)
+                {
+                    Consider(_riskyFallbackIds[pos], query, topDist, topLabel);
+                }
             }
         }
 
@@ -461,6 +521,140 @@ CandidateSearchDone:
         }
 
         return frauds;
+    }
+
+    [SkipLocalsInit]
+    private void ConsiderRiskyCompactRange(ReadOnlySpan<short> query, int start, int end, Span<long> topDist, Span<byte> topLabel)
+    {
+        if (_useRiskySimd && Avx2.IsSupported)
+        {
+            ConsiderRiskyCompactRangeAvx2(query, start, end, topDist, topLabel);
+            return;
+        }
+
+        if (_useRiskySimd && Sse2.IsSupported)
+        {
+            ConsiderRiskyCompactRangeSse2(query, start, end, topDist, topLabel);
+            return;
+        }
+
+        ConsiderRiskyCompactRangeScalar(query, start, end, topDist, topLabel);
+    }
+
+    [SkipLocalsInit]
+    private void ConsiderRiskyCompactRangeAvx2(ReadOnlySpan<short> query, int start, int end, Span<long> topDist, Span<byte> topLabel)
+    {
+        Span<short> paddedQuery = stackalloc short[RiskyVectorStride];
+        paddedQuery.Clear();
+        query.CopyTo(paddedQuery);
+
+        fixed (short* queryPtr = paddedQuery)
+        fixed (short* vectorBase = _riskyFallbackVectors)
+        fixed (byte* labelBase = _riskyFallbackLabels)
+        {
+            for (var pos = start; pos < end; pos++)
+            {
+                var dist = DistanceSquaredRiskyAvx2(vectorBase + pos * RiskyVectorStride, queryPtr);
+                if (dist >= topDist[4])
+                {
+                    continue;
+                }
+
+                InsertRiskyCandidate(dist, labelBase[pos], topDist, topLabel);
+            }
+        }
+    }
+
+    [SkipLocalsInit]
+    private void ConsiderRiskyCompactRangeSse2(ReadOnlySpan<short> query, int start, int end, Span<long> topDist, Span<byte> topLabel)
+    {
+        Span<short> paddedQuery = stackalloc short[RiskyVectorStride];
+        paddedQuery.Clear();
+        query.CopyTo(paddedQuery);
+
+        fixed (short* queryPtr = paddedQuery)
+        fixed (short* vectorBase = _riskyFallbackVectors)
+        fixed (byte* labelBase = _riskyFallbackLabels)
+        {
+            for (var pos = start; pos < end; pos++)
+            {
+                var dist = DistanceSquaredRiskySse2(vectorBase + pos * RiskyVectorStride, queryPtr);
+                if (dist >= topDist[4])
+                {
+                    continue;
+                }
+
+                InsertRiskyCandidate(dist, labelBase[pos], topDist, topLabel);
+            }
+        }
+    }
+
+    private void ConsiderRiskyCompactRangeScalar(ReadOnlySpan<short> query, int start, int end, Span<long> topDist, Span<byte> topLabel)
+    {
+        fixed (short* vectorBase = _riskyFallbackVectors)
+        fixed (byte* labelBase = _riskyFallbackLabels)
+        {
+            for (var pos = start; pos < end; pos++)
+            {
+                var dist = DistanceSquaredRiskyScalar(vectorBase + pos * RiskyVectorStride, query, topDist[4]);
+                if (dist >= topDist[4])
+                {
+                    continue;
+                }
+
+                InsertRiskyCandidate(dist, labelBase[pos], topDist, topLabel);
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void InsertRiskyCandidate(long dist, byte label, Span<long> topDist, Span<byte> topLabel)
+    {
+        if (dist < topDist[0])
+        {
+            topDist[4] = topDist[3];
+            topDist[3] = topDist[2];
+            topDist[2] = topDist[1];
+            topDist[1] = topDist[0];
+            topDist[0] = dist;
+            topLabel[4] = topLabel[3];
+            topLabel[3] = topLabel[2];
+            topLabel[2] = topLabel[1];
+            topLabel[1] = topLabel[0];
+            topLabel[0] = label;
+        }
+        else if (dist < topDist[1])
+        {
+            topDist[4] = topDist[3];
+            topDist[3] = topDist[2];
+            topDist[2] = topDist[1];
+            topDist[1] = dist;
+            topLabel[4] = topLabel[3];
+            topLabel[3] = topLabel[2];
+            topLabel[2] = topLabel[1];
+            topLabel[1] = label;
+        }
+        else if (dist < topDist[2])
+        {
+            topDist[4] = topDist[3];
+            topDist[3] = topDist[2];
+            topDist[2] = dist;
+            topLabel[4] = topLabel[3];
+            topLabel[3] = topLabel[2];
+            topLabel[2] = label;
+        }
+        else if (dist < topDist[3])
+        {
+            topDist[4] = topDist[3];
+            topDist[3] = dist;
+            topLabel[4] = topLabel[3];
+            topLabel[3] = label;
+        }
+        else
+        {
+            topDist[4] = dist;
+            topLabel[4] = label;
+        }
     }
 
     private static ClassificationDiagnostics Diagnostic(
@@ -762,6 +956,97 @@ CandidateSearchDone:
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long DistanceSquaredRiskyAvx2(short* vector, short* query)
+    {
+        var diff = Avx2.Subtract(Avx.LoadVector256(query), Avx.LoadVector256(vector));
+        var pairs = Avx2.MultiplyAddAdjacent(diff, diff);
+        return (long)pairs.GetElement(0) +
+               pairs.GetElement(1) +
+               pairs.GetElement(2) +
+               pairs.GetElement(3) +
+               pairs.GetElement(4) +
+               pairs.GetElement(5) +
+               pairs.GetElement(6) +
+               pairs.GetElement(7);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long DistanceSquaredRiskySse2(short* vector, short* query)
+    {
+        var diff0 = Sse2.Subtract(Sse2.LoadVector128(query), Sse2.LoadVector128(vector));
+        var diff1 = Sse2.Subtract(Sse2.LoadVector128(query + 8), Sse2.LoadVector128(vector + 8));
+        var pairs = Sse2.Add(Sse2.MultiplyAddAdjacent(diff0, diff0), Sse2.MultiplyAddAdjacent(diff1, diff1));
+        return (long)pairs.GetElement(0) +
+               pairs.GetElement(1) +
+               pairs.GetElement(2) +
+               pairs.GetElement(3);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long DistanceSquaredRiskyScalar(short* vector, ReadOnlySpan<short> query, long cutoff)
+    {
+        ref var q = ref MemoryMarshal.GetReference(query);
+        long sum = 0;
+
+        var d = (long)Unsafe.Add(ref q, 6) - vector[6];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)Unsafe.Add(ref q, 10) - vector[10];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)Unsafe.Add(ref q, 9) - vector[9];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)Unsafe.Add(ref q, 5) - vector[5];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)Unsafe.Add(ref q, 11) - vector[11];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)Unsafe.Add(ref q, 2) - vector[2];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)Unsafe.Add(ref q, 4) - vector[4];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)Unsafe.Add(ref q, 7) - vector[7];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = q - vector[0];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)Unsafe.Add(ref q, 1) - vector[1];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)Unsafe.Add(ref q, 8) - vector[8];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)Unsafe.Add(ref q, 12) - vector[12];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)Unsafe.Add(ref q, 3) - vector[3];
+        sum += d * d;
+        if (sum >= cutoff) return sum;
+
+        d = (long)Unsafe.Add(ref q, 13) - vector[13];
+        sum += d * d;
+
+        return sum;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private byte Label(uint id)
     {
         return *(_ptr + _labelsOffset + id);
@@ -802,8 +1087,12 @@ CandidateSearchDone:
         byte* ptr,
         int count,
         long vectorsOffset,
+        long labelsOffset,
         in RiskyFallbackFilter filter,
+        bool buildCompact,
         out uint[] ids,
+        out short[] vectors,
+        out byte[] labels,
         out int[] bucketOffsets)
     {
         var idList = new List<uint>(128_000);
@@ -828,9 +1117,35 @@ CandidateSearchDone:
             bucketOffsets[i + 1] = bucketOffsets[i] + counts[i];
         }
 
-        ids = new uint[idList.Count];
         var writePositions = new int[Constants.BucketCount];
         bucketOffsets.AsSpan(0, Constants.BucketCount).CopyTo(writePositions);
+
+        if (buildCompact)
+        {
+            ids = Array.Empty<uint>();
+            vectors = new short[idList.Count * RiskyVectorStride];
+            labels = new byte[idList.Count];
+
+            for (var i = 0; i < idList.Count; i++)
+            {
+                var key = keyList[i];
+                var writePosition = writePositions[key]++;
+                var vector = ptr + vectorsOffset + idList[i] * Constants.Dim * 2L;
+                var vectorStart = writePosition * RiskyVectorStride;
+                for (var dim = 0; dim < Constants.Dim; dim++)
+                {
+                    vectors[vectorStart + dim] = Unsafe.ReadUnaligned<short>(vector + dim * 2);
+                }
+
+                labels[writePosition] = *(ptr + labelsOffset + idList[i]);
+            }
+
+            return;
+        }
+
+        ids = new uint[idList.Count];
+        vectors = Array.Empty<short>();
+        labels = Array.Empty<byte>();
 
         for (var i = 0; i < idList.Count; i++)
         {

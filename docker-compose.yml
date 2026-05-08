@@ -39,6 +39,15 @@ services:
       PROFILE_LEGIT_MIN_COUNT: "5"
       PROFILE_FRAUD_MIN_COUNT: "15"
       EXACT_FALLBACK: "risky"
+      RISKY_AMOUNT_MIN: "400"
+      RISKY_AMOUNT_MAX: "3000"
+      RISKY_INSTALLMENTS_MIN: "2200"
+      RISKY_INSTALLMENTS_MAX: "6200"
+      RISKY_RATIO_MIN: "850"
+      RISKY_KM_HOME_MIN: "250"
+      RISKY_KM_HOME_MAX: "4000"
+      RISKY_TX24H_MAX: "5800"
+      RISKY_MERCHANT_AVG_MAX: "420"
     volumes:
       - backend-sockets:/sockets
     security_opt:
@@ -70,6 +79,15 @@ services:
       PROFILE_LEGIT_MIN_COUNT: "5"
       PROFILE_FRAUD_MIN_COUNT: "15"
       EXACT_FALLBACK: "risky"
+      RISKY_AMOUNT_MIN: "400"
+      RISKY_AMOUNT_MAX: "3000"
+      RISKY_INSTALLMENTS_MIN: "2200"
+      RISKY_INSTALLMENTS_MAX: "6200"
+      RISKY_RATIO_MIN: "850"
+      RISKY_KM_HOME_MIN: "250"
+      RISKY_KM_HOME_MAX: "4000"
+      RISKY_TX24H_MAX: "5800"
+      RISKY_MERCHANT_AVG_MAX: "420"
     volumes:
       - backend-sockets:/sockets
     security_opt:

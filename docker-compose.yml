@@ -1,6 +1,6 @@
 services:
   lb:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:cd51eea42aab556e4e078efa6661e908eb05fa47
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:60bb7f2834d0633470c04cbb7e532fe0fb87fea8
     platform: linux/amd64
     entrypoint: ["rinha-lb"]
     ports:
@@ -23,7 +23,7 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:cd51eea42aab556e4e078efa6661e908eb05fa47
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:60bb7f2834d0633470c04cbb7e532fe0fb87fea8
     platform: linux/amd64
     environment:
       BIND_ADDR: unix:/sockets/api1.sock
@@ -39,7 +39,6 @@ services:
       PROFILE_LEGIT_MIN_COUNT: "5"
       PROFILE_FRAUD_MIN_COUNT: "15"
       EXACT_FALLBACK: "risky"
-      RISKY_SIMD: "0"
     volumes:
       - backend-sockets:/sockets
     security_opt:
@@ -55,7 +54,7 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:cd51eea42aab556e4e078efa6661e908eb05fa47
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:60bb7f2834d0633470c04cbb7e532fe0fb87fea8
     platform: linux/amd64
     environment:
       BIND_ADDR: unix:/sockets/api2.sock
@@ -71,7 +70,6 @@ services:
       PROFILE_LEGIT_MIN_COUNT: "5"
       PROFILE_FRAUD_MIN_COUNT: "15"
       EXACT_FALLBACK: "risky"
-      RISKY_SIMD: "0"
     volumes:
       - backend-sockets:/sockets
     security_opt:

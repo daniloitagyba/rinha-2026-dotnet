@@ -8,15 +8,12 @@ using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Runtime.Intrinsics;
-using System.Runtime.Intrinsics.X86;
 
 internal unsafe sealed class BinaryIndex : IDisposable
 {
     private static ReadOnlySpan<byte> Magic => "RINHA26I"u8;
     private const int HeaderLength = 80;
     private const int ProfileKeyCount = 1 << 22;
-    private const int RiskyVectorStride = 16;
     private const byte LegitMask = 1;
     private const byte FraudMask = 2;
 
@@ -30,11 +27,9 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly long _bucketOffsetsOffset;
     private readonly ushort[] _profileCounts;
     private readonly byte[] _profileLabelMasks;
-    private readonly short[] _riskyFallbackVectors;
-    private readonly byte[] _riskyFallbackLabels;
-    private readonly bool _useRiskySimd;
+    private readonly uint[] _riskyFallbackIds;
 
-    public int RiskyFallbackCount => _riskyFallbackLabels.Length;
+    public int RiskyFallbackCount => _riskyFallbackIds.Length;
 
     private BinaryIndex(
         MemoryMappedFile mappedFile,
@@ -47,9 +42,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         long bucketOffsetsOffset,
         ushort[] profileCounts,
         byte[] profileLabelMasks,
-        short[] riskyFallbackVectors,
-        byte[] riskyFallbackLabels,
-        bool useRiskySimd)
+        uint[] riskyFallbackIds)
     {
         _mappedFile = mappedFile;
         _accessor = accessor;
@@ -61,9 +54,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _bucketOffsetsOffset = bucketOffsetsOffset;
         _profileCounts = profileCounts;
         _profileLabelMasks = profileLabelMasks;
-        _riskyFallbackVectors = riskyFallbackVectors;
-        _riskyFallbackLabels = riskyFallbackLabels;
-        _useRiskySimd = useRiskySimd;
+        _riskyFallbackIds = riskyFallbackIds;
     }
 
     public static BinaryIndex Open(string path)
@@ -127,15 +118,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
 
             BuildProfileStats(ptr, count, vectorsOffset, labelsOffset, out var profileCounts, out var profileLabelMasks);
             var riskyFallbackFilter = RiskyFallbackFilter.FromEnvironment();
-            BuildRiskyFallbackData(
-                ptr,
-                count,
-                vectorsOffset,
-                labelsOffset,
-                in riskyFallbackFilter,
-                out var riskyFallbackVectors,
-                out var riskyFallbackLabels);
-            var useRiskySimd = EnvBool("RISKY_SIMD", true);
+            var riskyFallbackIds = BuildRiskyFallbackIds(ptr, count, vectorsOffset, in riskyFallbackFilter);
 
             return new BinaryIndex(
                 mappedFile,
@@ -148,9 +131,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 bucketOffsetsOffset,
                 profileCounts,
                 profileLabelMasks,
-                riskyFallbackVectors,
-                riskyFallbackLabels,
-                useRiskySimd);
+                riskyFallbackIds);
         }
         catch
         {
@@ -368,7 +349,7 @@ CandidateSearchDone:
     [SkipLocalsInit]
     private int ClassifyRiskyFlat(ReadOnlySpan<short> query, bool allowFullTiebreak)
     {
-        if (_riskyFallbackLabels.Length < Constants.K)
+        if (_riskyFallbackIds.Length < Constants.K)
         {
             return ClassifyFlat(query);
         }
@@ -377,7 +358,10 @@ CandidateSearchDone:
         Span<byte> topLabel = stackalloc byte[Constants.K];
         topDist.Fill(long.MaxValue);
 
-        ConsiderRiskyFallback(query, topDist, topLabel);
+        foreach (var id in _riskyFallbackIds)
+        {
+            Consider(id, query, topDist, topLabel);
+        }
 
         var frauds = CountFrauds(topLabel);
         return allowFullTiebreak && NeedsFullRiskyTiebreak(query, frauds) ? ClassifyFlat(query) : frauds;
@@ -387,7 +371,7 @@ CandidateSearchDone:
     private int ClassifyRiskyFlatForDiagnostics(ReadOnlySpan<short> query, bool allowFullTiebreak, out bool usedFullFlat, out int fallbackCandidates)
     {
         usedFullFlat = false;
-        if (_riskyFallbackLabels.Length < Constants.K)
+        if (_riskyFallbackIds.Length < Constants.K)
         {
             usedFullFlat = true;
             fallbackCandidates = _count;
@@ -398,9 +382,12 @@ CandidateSearchDone:
         Span<byte> topLabel = stackalloc byte[Constants.K];
         topDist.Fill(long.MaxValue);
 
-        ConsiderRiskyFallback(query, topDist, topLabel);
+        foreach (var id in _riskyFallbackIds)
+        {
+            Consider(id, query, topDist, topLabel);
+        }
 
-        fallbackCandidates = _riskyFallbackLabels.Length;
+        fallbackCandidates = _riskyFallbackIds.Length;
         var frauds = CountFrauds(topLabel);
         if (allowFullTiebreak && NeedsFullRiskyTiebreak(query, frauds))
         {
@@ -597,12 +584,7 @@ CandidateSearchDone:
             return;
         }
 
-        InsertCandidate(dist, Label(id), topDist, topLabel);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void InsertCandidate(long dist, byte label, Span<long> topDist, Span<byte> topLabel)
-    {
+        var label = Label(id);
         if (dist < topDist[0])
         {
             topDist[4] = topDist[3];
@@ -647,93 +629,6 @@ CandidateSearchDone:
         {
             topDist[4] = dist;
             topLabel[4] = label;
-        }
-    }
-
-    [SkipLocalsInit]
-    private void ConsiderRiskyFallback(ReadOnlySpan<short> query, Span<long> topDist, Span<byte> topLabel)
-    {
-        if (_useRiskySimd && Avx2.IsSupported)
-        {
-            ConsiderRiskyFallbackAvx2(query, topDist, topLabel);
-            return;
-        }
-
-        if (_useRiskySimd && Sse2.IsSupported)
-        {
-            ConsiderRiskyFallbackSse2(query, topDist, topLabel);
-            return;
-        }
-
-        ConsiderRiskyFallbackScalar(query, topDist, topLabel);
-    }
-
-    [SkipLocalsInit]
-    private void ConsiderRiskyFallbackAvx2(ReadOnlySpan<short> query, Span<long> topDist, Span<byte> topLabel)
-    {
-        Span<short> paddedQuery = stackalloc short[RiskyVectorStride];
-        paddedQuery.Clear();
-        query.CopyTo(paddedQuery);
-
-        fixed (short* queryPtr = paddedQuery)
-        fixed (short* vectorBase = _riskyFallbackVectors)
-        fixed (byte* labelBase = _riskyFallbackLabels)
-        {
-            var count = _riskyFallbackLabels.Length;
-            for (var i = 0; i < count; i++)
-            {
-                var dist = DistanceSquaredRiskyAvx2(vectorBase + i * RiskyVectorStride, queryPtr);
-                if (dist >= topDist[4])
-                {
-                    continue;
-                }
-
-                InsertCandidate(dist, labelBase[i], topDist, topLabel);
-            }
-        }
-    }
-
-    [SkipLocalsInit]
-    private void ConsiderRiskyFallbackSse2(ReadOnlySpan<short> query, Span<long> topDist, Span<byte> topLabel)
-    {
-        Span<short> paddedQuery = stackalloc short[RiskyVectorStride];
-        paddedQuery.Clear();
-        query.CopyTo(paddedQuery);
-
-        fixed (short* queryPtr = paddedQuery)
-        fixed (short* vectorBase = _riskyFallbackVectors)
-        fixed (byte* labelBase = _riskyFallbackLabels)
-        {
-            var count = _riskyFallbackLabels.Length;
-            for (var i = 0; i < count; i++)
-            {
-                var dist = DistanceSquaredRiskySse2(vectorBase + i * RiskyVectorStride, queryPtr);
-                if (dist >= topDist[4])
-                {
-                    continue;
-                }
-
-                InsertCandidate(dist, labelBase[i], topDist, topLabel);
-            }
-        }
-    }
-
-    private void ConsiderRiskyFallbackScalar(ReadOnlySpan<short> query, Span<long> topDist, Span<byte> topLabel)
-    {
-        fixed (short* vectorBase = _riskyFallbackVectors)
-        fixed (byte* labelBase = _riskyFallbackLabels)
-        {
-            var count = _riskyFallbackLabels.Length;
-            for (var i = 0; i < count; i++)
-            {
-                var dist = DistanceSquaredRiskyScalar(vectorBase + i * RiskyVectorStride, query, topDist[4]);
-                if (dist >= topDist[4])
-                {
-                    continue;
-                }
-
-                InsertCandidate(dist, labelBase[i], topDist, topLabel);
-            }
         }
     }
 
@@ -803,97 +698,6 @@ CandidateSearchDone:
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long DistanceSquaredRiskyAvx2(short* vector, short* query)
-    {
-        var diff = Avx2.Subtract(Avx.LoadVector256(query), Avx.LoadVector256(vector));
-        var pairs = Avx2.MultiplyAddAdjacent(diff, diff);
-        return (long)pairs.GetElement(0) +
-               pairs.GetElement(1) +
-               pairs.GetElement(2) +
-               pairs.GetElement(3) +
-               pairs.GetElement(4) +
-               pairs.GetElement(5) +
-               pairs.GetElement(6) +
-               pairs.GetElement(7);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long DistanceSquaredRiskySse2(short* vector, short* query)
-    {
-        var diff0 = Sse2.Subtract(Sse2.LoadVector128(query), Sse2.LoadVector128(vector));
-        var diff1 = Sse2.Subtract(Sse2.LoadVector128(query + 8), Sse2.LoadVector128(vector + 8));
-        var pairs = Sse2.Add(Sse2.MultiplyAddAdjacent(diff0, diff0), Sse2.MultiplyAddAdjacent(diff1, diff1));
-        return (long)pairs.GetElement(0) +
-               pairs.GetElement(1) +
-               pairs.GetElement(2) +
-               pairs.GetElement(3);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long DistanceSquaredRiskyScalar(short* vector, ReadOnlySpan<short> query, long cutoff)
-    {
-        ref var q = ref MemoryMarshal.GetReference(query);
-        long sum = 0;
-
-        var d = (long)Unsafe.Add(ref q, 6) - vector[6];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = (long)Unsafe.Add(ref q, 10) - vector[10];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = (long)Unsafe.Add(ref q, 9) - vector[9];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = (long)Unsafe.Add(ref q, 5) - vector[5];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = (long)Unsafe.Add(ref q, 11) - vector[11];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = (long)Unsafe.Add(ref q, 2) - vector[2];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = (long)Unsafe.Add(ref q, 4) - vector[4];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = (long)Unsafe.Add(ref q, 7) - vector[7];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = q - vector[0];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = (long)Unsafe.Add(ref q, 1) - vector[1];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = (long)Unsafe.Add(ref q, 8) - vector[8];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = (long)Unsafe.Add(ref q, 12) - vector[12];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = (long)Unsafe.Add(ref q, 3) - vector[3];
-        sum += d * d;
-        if (sum >= cutoff) return sum;
-
-        d = (long)Unsafe.Add(ref q, 13) - vector[13];
-        sum += d * d;
-
-        return sum;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private byte Label(uint id)
     {
         return *(_ptr + _labelsOffset + id);
@@ -930,35 +734,19 @@ CandidateSearchDone:
         }
     }
 
-    private static void BuildRiskyFallbackData(
-        byte* ptr,
-        int count,
-        long vectorsOffset,
-        long labelsOffset,
-        in RiskyFallbackFilter filter,
-        out short[] vectors,
-        out byte[] labels)
+    private static uint[] BuildRiskyFallbackIds(byte* ptr, int count, long vectorsOffset, in RiskyFallbackFilter filter)
     {
-        var vectorList = new List<short>(128_000 * RiskyVectorStride);
-        var labelList = new List<byte>(128_000);
+        var ids = new List<uint>(128_000);
         for (uint id = 0; id < count; id++)
         {
             var vector = ptr + vectorsOffset + id * Constants.Dim * 2L;
             if (IsRiskyFallbackReference(vector, in filter))
             {
-                for (var dim = 0; dim < Constants.Dim; dim++)
-                {
-                    vectorList.Add(Unsafe.ReadUnaligned<short>(vector + dim * 2));
-                }
-
-                vectorList.Add(0);
-                vectorList.Add(0);
-                labelList.Add(*(ptr + labelsOffset + id));
+                ids.Add(id);
             }
         }
 
-        vectors = vectorList.ToArray();
-        labels = labelList.ToArray();
+        return ids.ToArray();
     }
 
     private static bool IsRiskyFallbackReference(byte* vector, in RiskyFallbackFilter filter)
@@ -1130,12 +918,6 @@ CandidateSearchDone:
     private static byte VolatileRead(byte* ptr)
     {
         return System.Threading.Volatile.Read(ref *ptr);
-    }
-
-    private static bool EnvBool(string name, bool fallback)
-    {
-        var value = Environment.GetEnvironmentVariable(name);
-        return value is null ? fallback : value is "1" or "true" or "TRUE" or "yes" or "YES";
     }
 
     public void Dispose()

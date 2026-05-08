@@ -39,6 +39,7 @@ services:
       PROFILE_LEGIT_MIN_COUNT: "5"
       PROFILE_FRAUD_MIN_COUNT: "15"
       EXACT_FALLBACK: "risky"
+      RISKY_SIMD: "0"
     volumes:
       - backend-sockets:/sockets
     security_opt:
@@ -70,6 +71,7 @@ services:
       PROFILE_LEGIT_MIN_COUNT: "5"
       PROFILE_FRAUD_MIN_COUNT: "15"
       EXACT_FALLBACK: "risky"
+      RISKY_SIMD: "0"
     volumes:
       - backend-sockets:/sockets
     security_opt:

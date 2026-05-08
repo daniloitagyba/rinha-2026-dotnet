@@ -6,7 +6,6 @@ TestResults/
 BenchmarkDotNet.Artifacts/
 .bench-sockets/
 AGENTS.md
-submission/
 data/*.idx
 resources/references.json.gz
 results/*.json

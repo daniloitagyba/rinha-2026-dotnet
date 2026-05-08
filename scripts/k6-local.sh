@@ -49,6 +49,10 @@ esac
 if [ "$MODE" = "submission" ]; then
   if [ -n "$SUBMISSION_COMPOSE_FILE" ]; then
     COMPOSE_FILE="$SUBMISSION_COMPOSE_FILE"
+  elif [ -f "$ROOT/../rinha-2026-submission/docker-compose.yml" ]; then
+    COMPOSE_FILE="$ROOT/../rinha-2026-submission/docker-compose.yml"
+  elif [ -f "/mnt/c/tmp/rinha-2026-submission/docker-compose.yml" ]; then
+    COMPOSE_FILE="/mnt/c/tmp/rinha-2026-submission/docker-compose.yml"
   else
     COMPOSE_FILE="$ROOT/submission/docker-compose.yml"
   fi

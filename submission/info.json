@@ -1,7 +1,0 @@
-{
-  "participants": ["Danilo Itagyba"],
-  "social": ["https://github.com/daniloitagyba","https://www.linkedin.com/in/danilo-itagyba/","https://x.com/daniloitagyba"],
-  "source-code-repo": "https://github.com/daniloitagyba/rinha-2026-dotnet",
-  "stack": [".net 10", "native-aot", "c#", "custom-tcp-proxy", "raw-http", "unix-sockets", "mmap", "custom-vector-index", "profile-fastpath", "int16"],
-  "open_to_work": false
-}

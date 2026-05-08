@@ -6,7 +6,6 @@ internal enum ClassificationPath
     ParseError = 1,
     ProfileFastPath = 2,
     AnnBuckets = 3,
-    RiskyDirect = 4,
     RiskyFlatFallback = 5,
     FullFlatFallback = 6
 }

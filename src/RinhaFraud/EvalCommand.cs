@@ -401,7 +401,6 @@ internal static class EvalCommand
             ClassificationPath.ParseError => "parse_error",
             ClassificationPath.ProfileFastPath => "profile_fast_path",
             ClassificationPath.AnnBuckets => "ann_buckets",
-            ClassificationPath.RiskyDirect => "risky_direct",
             ClassificationPath.RiskyFlatFallback => "risky_flat_fallback",
             ClassificationPath.FullFlatFallback => "full_flat_fallback",
             _ => "unknown"

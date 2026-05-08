@@ -16,52 +16,6 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private const int ProfileKeyCount = 1 << 22;
     private const byte LegitMask = 1;
     private const byte FraudMask = 2;
-    private static ReadOnlySpan<int> RiskyFallbackProfileKeys =>
-    [
-        540714, 540815, 541207, 541231, 541343, 542359, 542383, 543391, 557203, 557605,
-        557699, 557703, 557719, 557727, 557743, 558231, 606354, 606372, 606379, 606767,
-        606851, 606872, 606875, 607890, 608415, 608431, 608921, 622639, 622751, 623235,
-        623255, 623263, 623279, 623775, 625326, 739999
-    ];
-
-    private static ReadOnlySpan<int> RiskyDirectApproveRules =>
-    [
-        4194356, 4261075, 4326521, 4326547, 4326649, 4326651, 4326739, 4327595, 4327747, 4329627,
-        4329979, 4330516, 4330641, 4330643, 4330746, 4330825, 4334748, 4334891, 4335835, 4337865,
-        4337868, 4343139, 4343163, 4344059, 4346987, 4347129, 4347130, 4351355, 4351484, 4391956,
-        4392091, 4399251, 4401307, 4420931, 4456593, 4456601, 4456603, 4457497, 4458874, 4458876,
-        4460729, 4460731, 4460796, 4460842, 4461625, 4461810, 4461811, 4461867, 4461881, 4461882,
-        4461883, 4461937, 4461945, 4462939, 4468763, 4469915, 4469916, 4469953, 4469955, 4470011,
-        4472955, 4473051, 4474105, 4474108, 4474364, 4481147, 4730915, 4797523, 4797595, 4849684,
-        4849851, 4849931, 4849979, 4849995, 4850794, 4850796, 4850827, 4850890, 4850891, 4850932,
-        4850977, 4850978, 4851867, 4853923, 4854810, 4854899, 4854955, 4855019, 4855082, 4855121,
-        4855964, 4856010, 4856011, 4859067, 4867321, 4867322, 4867450, 4871387, 4875772, 4879739,
-        4919675, 4920507, 4923419, 4980892, 4981019, 4981779, 4981914, 4981915, 4981921, 4981964,
-        4981979, 4982009, 4982010, 4982939, 4986026, 4986027, 4986041, 4986107, 4986233, 4986234,
-        4987003, 4990203, 4993163, 4998497, 4998499, 4998627, 5002490, 5002491, 5002619, 5003643,
-        5006715, 5009739, 5010811, 5051540, 5051771, 5055803, 5248043, 5379100, 5379323, 5380155,
-        5383211, 5386563, 5395834, 5395835, 5510289, 5510347, 5510355, 5522810, 5522811, 5796171,
-        5899513, 5911803, 5919994, 5920252, 6034667, 6041763, 6043804
-    ];
-
-    private static ReadOnlySpan<int> RiskyDirectDenyRules =>
-    [
-        4199778, 4200682, 4263978, 4265306, 4325434, 4325562, 4326652, 4326713, 4326738, 4327586,
-        4327609, 4329722, 4329851, 4330514, 4330522, 4330634, 4330748, 4330826, 4330827, 4331722,
-        4334042, 4338018, 4338875, 4338882, 4338884, 4339002, 4339058, 4342138, 4343161, 4344169,
-        4344186, 4346074, 4347002, 4347132, 4355449, 4390929, 4396178, 4396378, 4404369, 4456594,
-        4457498, 4457618, 4460850, 4461593, 4461722, 4461738, 4461745, 4461746, 4461747, 4461819,
-        4461858, 4461938, 4461947, 4462746, 4468858, 4469769, 4470266, 4470930, 4473170, 4474074,
-        4478330, 4478332, 4481218, 4523074, 4524058, 4526106, 4527113, 4530202, 4722874, 4731242,
-        4736082, 4849674, 4849890, 4850706, 4850834, 4850892, 4851034, 4852010, 4854057, 4854113,
-        4854980, 4855003, 4855081, 4855084, 4855122, 4855963, 4856042, 4858026, 4859090, 4859177,
-        4859179, 4859218, 4861970, 4861978, 4867324, 4871393, 4871402, 4920508, 4981020, 4981922,
-        4981937, 4981938, 4981963, 4982929, 4983082, 4983162, 4983163, 4985098, 4985930, 4986108,
-        4986235, 4986282, 4990282, 4991129, 4993042, 4994057, 4994186, 4994202, 4994386, 5002489,
-        5002492, 5010786, 5047322, 5051418, 5051419, 5051420, 5059730, 5375018, 5379249, 5384441,
-        5386564, 5387594, 5395836, 5506338, 5510290, 5510292, 5510356, 5514418, 5768201, 5772490,
-        5789946, 5898354, 5899514, 5911706, 5913026, 6042874, 6051178
-    ];
 
     private readonly MemoryMappedFile _mappedFile;
     private readonly MemoryMappedViewAccessor _accessor;
@@ -257,12 +211,6 @@ CandidateSearchDone:
         }
 
         var frauds = CountFrauds(topLabel);
-        if (searchParams.ExactFallback == SearchParams.ExactFallbackRisky &&
-            TryRiskyDirectDecision(query, frauds, out var directFrauds))
-        {
-            return directFrauds;
-        }
-
         if (!ShouldUseExactFallback(query, frauds, searchParams))
         {
             return frauds;
@@ -353,19 +301,6 @@ CandidateSearchDone:
         }
 
         var frauds = CountFrauds(topLabel);
-        if (searchParams.ExactFallback == SearchParams.ExactFallbackRisky &&
-            TryRiskyDirectDecision(query, frauds, out var directFrauds))
-        {
-            return Diagnostic(
-                directFrauds,
-                ClassificationPath.RiskyDirect,
-                profileKey,
-                primaryBucket,
-                candidates,
-                fallbackCandidates: 0,
-                started);
-        }
-
         if (!ShouldUseExactFallback(query, frauds, searchParams))
         {
             return Diagnostic(
@@ -509,73 +444,10 @@ CandidateSearchDone:
     {
         if (frauds > 0 && frauds < Constants.K)
         {
-            if (searchParams.ExactFallback == SearchParams.ExactFallbackUncertain)
-            {
-                return true;
-            }
-
-            return searchParams.ExactFallback == SearchParams.ExactFallbackRisky && IsRiskyFallbackProfile(query);
+            return searchParams.ExactFallback is SearchParams.ExactFallbackUncertain or SearchParams.ExactFallbackRisky;
         }
 
         return searchParams.ExactFallback == SearchParams.ExactFallbackRisky && IsStrongFallbackRisk(query, frauds);
-    }
-
-    private static bool IsRiskyFallbackProfile(ReadOnlySpan<short> query)
-    {
-        var key = ProfileKey(query);
-        return ContainsSorted(RiskyFallbackProfileKeys, key);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryRiskyDirectDecision(ReadOnlySpan<short> query, int frauds, out int directFrauds)
-    {
-        directFrauds = frauds;
-        if (frauds <= 0 || frauds >= Constants.K)
-        {
-            return false;
-        }
-
-        var rule = (ProfileKey(query) << 3) | frauds;
-        if (ContainsSorted(RiskyDirectApproveRules, rule))
-        {
-            directFrauds = 0;
-            return true;
-        }
-
-        if (ContainsSorted(RiskyDirectDenyRules, rule))
-        {
-            directFrauds = Constants.K;
-            return true;
-        }
-
-        return false;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool ContainsSorted(ReadOnlySpan<int> values, int needle)
-    {
-        var lo = 0;
-        var hi = values.Length - 1;
-        while (lo <= hi)
-        {
-            var mid = (int)((uint)(lo + hi) >> 1);
-            var value = values[mid];
-            if (value == needle)
-            {
-                return true;
-            }
-
-            if (value < needle)
-            {
-                lo = mid + 1;
-            }
-            else
-            {
-                hi = mid - 1;
-            }
-        }
-
-        return false;
     }
 
     private static bool IsStrongFallbackRisk(ReadOnlySpan<short> query, int frauds)

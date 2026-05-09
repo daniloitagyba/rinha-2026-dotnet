@@ -39,8 +39,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly int[] _riskyFineBucketOffsets;
     private readonly int[] _riskyCoarseFineOffsets;
     private readonly int[] _riskyFineKeys;
+    private readonly short[] _riskyFineMinBounds;
+    private readonly short[] _riskyFineMaxBounds;
     private readonly bool _useRiskyBuckets;
     private readonly bool _useRiskyFineBuckets;
+    private readonly bool _useRiskyFineBounds;
     private readonly bool _useRiskyCompact;
     private readonly bool _useRiskySimd;
 
@@ -64,8 +67,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
         int[] riskyFineBucketOffsets,
         int[] riskyCoarseFineOffsets,
         int[] riskyFineKeys,
+        short[] riskyFineMinBounds,
+        short[] riskyFineMaxBounds,
         bool useRiskyBuckets,
         bool useRiskyFineBuckets,
+        bool useRiskyFineBounds,
         bool useRiskyCompact,
         bool useRiskySimd)
     {
@@ -86,8 +92,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _riskyFineBucketOffsets = riskyFineBucketOffsets;
         _riskyCoarseFineOffsets = riskyCoarseFineOffsets;
         _riskyFineKeys = riskyFineKeys;
+        _riskyFineMinBounds = riskyFineMinBounds;
+        _riskyFineMaxBounds = riskyFineMaxBounds;
         _useRiskyBuckets = useRiskyBuckets;
         _useRiskyFineBuckets = useRiskyFineBuckets;
+        _useRiskyFineBounds = useRiskyFineBounds;
         _useRiskyCompact = useRiskyCompact;
         _useRiskySimd = useRiskySimd;
     }
@@ -167,9 +176,12 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 out var riskyBucketOffsets,
                 out var riskyFineBucketOffsets,
                 out var riskyCoarseFineOffsets,
-                out var riskyFineKeys);
+                out var riskyFineKeys,
+                out var riskyFineMinBounds,
+                out var riskyFineMaxBounds);
             var useRiskyBuckets = EnvBool("RISKY_BUCKETS", true);
             var useRiskyFineBuckets = EnvBool("RISKY_FINE_BUCKETS", true);
+            var useRiskyFineBounds = EnvBool("RISKY_FINE_BOUNDS", true);
             var useRiskySimd = EnvBool("RISKY_SIMD", true);
 
             return new BinaryIndex(
@@ -190,8 +202,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 riskyFineBucketOffsets,
                 riskyCoarseFineOffsets,
                 riskyFineKeys,
+                riskyFineMinBounds,
+                riskyFineMaxBounds,
                 useRiskyBuckets,
                 useRiskyFineBuckets,
+                useRiskyFineBounds,
                 useRiskyCompact,
                 useRiskySimd);
         }
@@ -586,7 +601,7 @@ CandidateSearchDone:
             for (var finePos = fineStart; finePos < fineEnd; finePos++)
             {
                 var fineKey = _riskyFineKeys[finePos];
-                if (RiskyFineBucketLowerBound(fineKey, query) >= topDist[Constants.K - 1])
+                if (RiskyFineLowerBound(fineKey, query, topDist[Constants.K - 1]) >= topDist[Constants.K - 1])
                 {
                     continue;
                 }
@@ -1192,12 +1207,18 @@ CandidateSearchDone:
         out int[] bucketOffsets,
         out int[] fineBucketOffsets,
         out int[] coarseFineOffsets,
-        out int[] fineKeys)
+        out int[] fineKeys,
+        out short[] fineMinBounds,
+        out short[] fineMaxBounds)
     {
         var idList = new List<uint>(128_000);
         var fineKeyList = new List<int>(128_000);
         Span<int> counts = stackalloc int[Constants.BucketCount];
         var fineCounts = new int[RiskyFineBucketCount];
+        fineMinBounds = new short[RiskyFineBucketCount * Constants.Dim];
+        fineMaxBounds = new short[RiskyFineBucketCount * Constants.Dim];
+        Array.Fill(fineMinBounds, short.MaxValue);
+        Array.Fill(fineMaxBounds, short.MinValue);
 
         for (uint id = 0; id < count; id++)
         {
@@ -1210,6 +1231,22 @@ CandidateSearchDone:
                 fineKeyList.Add(fineKey);
                 counts[key]++;
                 fineCounts[fineKey]++;
+                var boundsStart = fineKey * Constants.Dim;
+                for (var dim = 0; dim < Constants.Dim; dim++)
+                {
+                    var value = Unsafe.ReadUnaligned<short>(vector + dim * 2);
+                    ref var min = ref fineMinBounds[boundsStart + dim];
+                    if (value < min)
+                    {
+                        min = value;
+                    }
+
+                    ref var max = ref fineMaxBounds[boundsStart + dim];
+                    if (value > max)
+                    {
+                        max = value;
+                    }
+                }
             }
         }
 
@@ -1335,6 +1372,49 @@ CandidateSearchDone:
         extra |= (Unsafe.ReadUnaligned<short>(vector + 20) > 0 ? 1 : 0) << 1;
         extra |= (Unsafe.ReadUnaligned<short>(vector + 22) > 0 ? 1 : 0) << 2;
         return (coarseKey << RiskyFineExtraBits) | extra;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private long RiskyFineLowerBound(int fineKey, ReadOnlySpan<short> query, long cutoff)
+    {
+        return _useRiskyFineBounds
+            ? RiskyFineBoundsLowerBound(fineKey, query, cutoff)
+            : RiskyFineBucketLowerBound(fineKey, query);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private long RiskyFineBoundsLowerBound(int fineKey, ReadOnlySpan<short> query, long cutoff)
+    {
+        var bounds = fineKey * Constants.Dim;
+        long sum = 0;
+        sum += RangeDistanceSquared(query[6], _riskyFineMinBounds[bounds + 6], _riskyFineMaxBounds[bounds + 6]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[10], _riskyFineMinBounds[bounds + 10], _riskyFineMaxBounds[bounds + 10]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[9], _riskyFineMinBounds[bounds + 9], _riskyFineMaxBounds[bounds + 9]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[5], _riskyFineMinBounds[bounds + 5], _riskyFineMaxBounds[bounds + 5]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[11], _riskyFineMinBounds[bounds + 11], _riskyFineMaxBounds[bounds + 11]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[2], _riskyFineMinBounds[bounds + 2], _riskyFineMaxBounds[bounds + 2]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[4], _riskyFineMinBounds[bounds + 4], _riskyFineMaxBounds[bounds + 4]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[7], _riskyFineMinBounds[bounds + 7], _riskyFineMaxBounds[bounds + 7]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[0], _riskyFineMinBounds[bounds], _riskyFineMaxBounds[bounds]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[1], _riskyFineMinBounds[bounds + 1], _riskyFineMaxBounds[bounds + 1]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[8], _riskyFineMinBounds[bounds + 8], _riskyFineMaxBounds[bounds + 8]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[12], _riskyFineMinBounds[bounds + 12], _riskyFineMaxBounds[bounds + 12]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[3], _riskyFineMinBounds[bounds + 3], _riskyFineMaxBounds[bounds + 3]);
+        if (sum >= cutoff) return sum;
+        sum += RangeDistanceSquared(query[13], _riskyFineMinBounds[bounds + 13], _riskyFineMaxBounds[bounds + 13]);
+        return sum;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

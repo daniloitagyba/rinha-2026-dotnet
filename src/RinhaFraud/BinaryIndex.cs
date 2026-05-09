@@ -616,6 +616,35 @@ CandidateSearchDone:
 
         Span<int> orderedFineKeys = stackalloc int[RiskyFineBucketsPerCoarse];
         Span<long> orderedFineBounds = stackalloc long[RiskyFineBucketsPerCoarse];
+        Span<long> amountBounds = stackalloc long[8];
+        Span<long> ratioBounds = stackalloc long[8];
+        Span<long> kmHomeBounds = stackalloc long[8];
+        Span<long> hourBounds = stackalloc long[4];
+        Span<long> lastBounds = stackalloc long[2];
+        for (var bucket = 0; bucket < 8; bucket++)
+        {
+            amountBounds[bucket] = BucketDistanceSquared(query[0], bucket, 8);
+            ratioBounds[bucket] = BucketDistanceSquared(query[2], bucket, 8);
+            kmHomeBounds[bucket] = BucketDistanceSquared(query[7], bucket, 8);
+        }
+
+        for (var bucket = 0; bucket < 4; bucket++)
+        {
+            hourBounds[bucket] = BucketDistanceSquared(query[3], bucket, 4);
+        }
+
+        lastBounds[0] = RangeDistanceSquared(query[5], 0, Constants.Scale);
+        lastBounds[1] = RangeDistanceSquared(query[5], -Constants.Scale, -Constants.Scale);
+
+        Span<long> fineExtraBounds = stackalloc long[RiskyFineBucketsPerCoarse];
+        for (var extra = 0; extra < RiskyFineBucketsPerCoarse; extra++)
+        {
+            fineExtraBounds[extra] =
+                BinaryDistanceSquared(query[9], extra & 1) +
+                BinaryDistanceSquared(query[10], (extra >> 1) & 1) +
+                BinaryDistanceSquared(query[11], (extra >> 2) & 1);
+        }
+
         var neighborKeys = Vectorizer.NeighborKeyOrderFor(query);
         for (var neighborIndex = 0; neighborIndex < neighborKeys.Length; neighborIndex++)
         {
@@ -627,7 +656,12 @@ CandidateSearchDone:
                 continue;
             }
 
-            var coarseLowerBound = RiskyBucketLowerBound(coarseKey, query);
+            var coarseLowerBound =
+                amountBounds[coarseKey & 7] +
+                ratioBounds[(coarseKey >> 3) & 7] +
+                kmHomeBounds[(coarseKey >> 6) & 7] +
+                hourBounds[(coarseKey >> 9) & 3] +
+                lastBounds[(coarseKey >> 11) & 1];
             if (coarseLowerBound >= topDist[Constants.K - 1])
             {
                 continue;
@@ -637,7 +671,7 @@ CandidateSearchDone:
             for (var finePos = fineStart; finePos < fineEnd; finePos++)
             {
                 var fineKey = _riskyFineKeys[finePos];
-                var lowerBound = RiskyFineBucketLowerBound(fineKey, query, coarseLowerBound);
+                var lowerBound = coarseLowerBound + fineExtraBounds[fineKey & (RiskyFineBucketsPerCoarse - 1)];
                 if (lowerBound >= topDist[Constants.K - 1])
                 {
                     continue;
@@ -1500,18 +1534,6 @@ CandidateSearchDone:
         sum += noLast == 0
             ? RangeDistanceSquared(query[5], 0, Constants.Scale)
             : RangeDistanceSquared(query[5], -Constants.Scale, -Constants.Scale);
-        return sum;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long RiskyFineBucketLowerBound(int fineKey, ReadOnlySpan<short> query, long coarseLowerBound)
-    {
-        var extra = fineKey & ((1 << RiskyFineExtraBits) - 1);
-
-        var sum = coarseLowerBound;
-        sum += BinaryDistanceSquared(query[9], extra & 1);
-        sum += BinaryDistanceSquared(query[10], (extra >> 1) & 1);
-        sum += BinaryDistanceSquared(query[11], (extra >> 2) & 1);
         return sum;
     }
 

@@ -10,6 +10,7 @@ param(
     [int]$PollSeconds = 20,
     [string]$IssueUrl,
     [string]$Token,
+    [string]$LocalTokenDir,
     [switch]$NoCreate,
     [switch]$DryRun
 )
@@ -24,8 +25,64 @@ if ([string]::IsNullOrWhiteSpace($Body)) {
     $Body = $Title
 }
 
+function ConvertFrom-SecureStringToText {
+    param([securestring]$SecureText)
+
+    $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureText)
+    try {
+        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+    }
+}
+
+function Get-LocalTokenDir {
+    param([string]$ExplicitDir)
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitDir)) {
+        return $ExplicitDir
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        return $null
+    }
+
+    return Join-Path $env:LOCALAPPDATA "rinha-2026-dotnet\secrets"
+}
+
+function Get-LocalGitHubToken {
+    param([string]$TokenDirectory)
+
+    $dir = Get-LocalTokenDir -ExplicitDir $TokenDirectory
+    if ([string]::IsNullOrWhiteSpace($dir)) {
+        return $null
+    }
+
+    $keyPath = Join-Path $dir "github-token.key"
+    $tokenPath = Join-Path $dir "github-token.enc"
+    if (-not (Test-Path $keyPath) -or -not (Test-Path $tokenPath)) {
+        return $null
+    }
+
+    try {
+        $key = [IO.File]::ReadAllBytes($keyPath)
+        $encrypted = (Get-Content -Raw -Path $tokenPath).Trim()
+        if ([string]::IsNullOrWhiteSpace($encrypted)) {
+            return $null
+        }
+
+        $secure = ConvertTo-SecureString $encrypted -Key $key
+        return ConvertFrom-SecureStringToText -SecureText $secure
+    } catch {
+        return $null
+    }
+}
+
 function Get-GitHubToken {
-    param([string]$ExplicitToken)
+    param(
+        [string]$ExplicitToken,
+        [string]$TokenDirectory
+    )
 
     if (-not [string]::IsNullOrWhiteSpace($ExplicitToken)) {
         return $ExplicitToken
@@ -37,6 +94,11 @@ function Get-GitHubToken {
 
     if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
         return $env:GH_TOKEN
+    }
+
+    $localToken = Get-LocalGitHubToken -TokenDirectory $TokenDirectory
+    if (-not [string]::IsNullOrWhiteSpace($localToken)) {
+        return $localToken
     }
 
     return $null
@@ -113,7 +175,7 @@ function Get-ResultForIssue {
     return $result
 }
 
-$authToken = Get-GitHubToken -ExplicitToken $Token
+$authToken = Get-GitHubToken -ExplicitToken $Token -TokenDirectory $LocalTokenDir
 $headers = New-GitHubHeaders -AuthToken $authToken
 
 if ($DryRun) {

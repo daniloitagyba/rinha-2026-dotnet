@@ -591,7 +591,8 @@ CandidateSearchDone:
                 continue;
             }
 
-            if (RiskyBucketLowerBound(coarseKey, query) >= topDist[Constants.K - 1])
+            var coarseLowerBound = RiskyBucketLowerBound(coarseKey, query);
+            if (coarseLowerBound >= topDist[Constants.K - 1])
             {
                 continue;
             }
@@ -600,7 +601,7 @@ CandidateSearchDone:
             for (var finePos = fineStart; finePos < fineEnd; finePos++)
             {
                 var fineKey = _riskyFineKeys[finePos];
-                var lowerBound = RiskyFineBucketLowerBound(fineKey, query);
+                var lowerBound = RiskyFineBucketLowerBound(fineKey, query, coarseLowerBound);
                 if (lowerBound >= topDist[Constants.K - 1])
                 {
                     continue;
@@ -623,7 +624,7 @@ CandidateSearchDone:
             {
                 if (orderedFineBounds[orderedPos] >= topDist[Constants.K - 1])
                 {
-                    continue;
+                    break;
                 }
 
                 var fineKey = orderedFineKeys[orderedPos];
@@ -1466,12 +1467,11 @@ CandidateSearchDone:
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long RiskyFineBucketLowerBound(int fineKey, ReadOnlySpan<short> query)
+    private static long RiskyFineBucketLowerBound(int fineKey, ReadOnlySpan<short> query, long coarseLowerBound)
     {
-        var coarseKey = fineKey >> RiskyFineExtraBits;
         var extra = fineKey & ((1 << RiskyFineExtraBits) - 1);
 
-        var sum = RiskyBucketLowerBound(coarseKey, query);
+        var sum = coarseLowerBound;
         sum += BinaryDistanceSquared(query[9], extra & 1);
         sum += BinaryDistanceSquared(query[10], (extra >> 1) & 1);
         sum += BinaryDistanceSquared(query[11], (extra >> 2) & 1);

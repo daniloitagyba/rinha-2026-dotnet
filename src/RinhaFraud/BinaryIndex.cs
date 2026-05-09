@@ -43,6 +43,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly bool _useRiskyFineBuckets;
     private readonly bool _useRiskyCompact;
     private readonly bool _useRiskySimd;
+    private readonly bool _useMappedSimd;
 
     public int RiskyFallbackCount => _useRiskyCompact ? _riskyFallbackLabels.Length : _riskyFallbackIds.Length;
 
@@ -67,7 +68,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
         bool useRiskyBuckets,
         bool useRiskyFineBuckets,
         bool useRiskyCompact,
-        bool useRiskySimd)
+        bool useRiskySimd,
+        bool useMappedSimd)
     {
         _mappedFile = mappedFile;
         _accessor = accessor;
@@ -90,6 +92,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _useRiskyFineBuckets = useRiskyFineBuckets;
         _useRiskyCompact = useRiskyCompact;
         _useRiskySimd = useRiskySimd;
+        _useMappedSimd = useMappedSimd;
     }
 
     public static BinaryIndex Open(string path)
@@ -171,6 +174,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var useRiskyBuckets = EnvBool("RISKY_BUCKETS", true);
             var useRiskyFineBuckets = EnvBool("RISKY_FINE_BUCKETS", true);
             var useRiskySimd = EnvBool("RISKY_SIMD", true);
+            var useMappedSimd = EnvBool("MAPPED_SIMD", true);
 
             return new BinaryIndex(
                 mappedFile,
@@ -193,7 +197,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 useRiskyBuckets,
                 useRiskyFineBuckets,
                 useRiskyCompact,
-                useRiskySimd);
+                useRiskySimd,
+                useMappedSimd);
         }
         catch
         {
@@ -240,14 +245,18 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var key = neighborKeys[neighborIndex];
             var start = BucketOffset(key);
             var end = BucketOffset(key + 1);
-            for (var itemPos = start; itemPos < end; itemPos++)
+            var scanEnd = end;
+            var remaining = searchParams.MaxCandidates - candidates;
+            if (end - start > remaining)
             {
-                Consider(itemPos, query, topDist, topLabel);
-                candidates++;
-                if (candidates >= searchParams.MaxCandidates)
-                {
-                    goto CandidateSearchDone;
-                }
+                scanEnd = start + (uint)remaining;
+            }
+
+            ConsiderCandidateRange(query, start, scanEnd, topDist, topLabel);
+            candidates += (int)(scanEnd - start);
+            if (candidates >= searchParams.MaxCandidates)
+            {
+                goto CandidateSearchDone;
             }
 
             if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel))
@@ -321,14 +330,18 @@ CandidateSearchDone:
             var key = neighborKeys[neighborIndex];
             var start = BucketOffset(key);
             var end = BucketOffset(key + 1);
-            for (var itemPos = start; itemPos < end; itemPos++)
+            var scanEnd = end;
+            var remaining = searchParams.MaxCandidates - candidates;
+            if (end - start > remaining)
             {
-                Consider(itemPos, query, topDist, topLabel);
-                candidates++;
-                if (candidates >= searchParams.MaxCandidates)
-                {
-                    goto CandidateSearchDone;
-                }
+                scanEnd = start + (uint)remaining;
+            }
+
+            ConsiderCandidateRange(query, start, scanEnd, topDist, topLabel);
+            candidates += (int)(scanEnd - start);
+            if (candidates >= searchParams.MaxCandidates)
+            {
+                goto CandidateSearchDone;
             }
 
             if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel))
@@ -400,10 +413,7 @@ CandidateSearchDone:
         Span<byte> topLabel = stackalloc byte[Constants.K];
         topDist.Fill(long.MaxValue);
 
-        for (uint id = 0; id < _count; id++)
-        {
-            Consider(id, query, topDist, topLabel);
-        }
+        ConsiderCandidateRange(query, 0, (uint)_count, topDist, topLabel);
 
         return CountFrauds(topLabel);
     }
@@ -930,6 +940,45 @@ CandidateSearchDone:
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ConsiderCandidateRange(ReadOnlySpan<short> query, uint start, uint end, Span<long> topDist, Span<byte> topLabel)
+    {
+        if (_useMappedSimd && Avx2.IsSupported)
+        {
+            ConsiderCandidateRangeAvx2(query, start, end, topDist, topLabel);
+            return;
+        }
+
+        for (var id = start; id < end; id++)
+        {
+            Consider(id, query, topDist, topLabel);
+        }
+    }
+
+    [SkipLocalsInit]
+    private void ConsiderCandidateRangeAvx2(ReadOnlySpan<short> query, uint start, uint end, Span<long> topDist, Span<byte> topLabel)
+    {
+        Span<short> paddedQuery = stackalloc short[RiskyVectorStride];
+        paddedQuery.Clear();
+        query.CopyTo(paddedQuery);
+
+        fixed (short* queryPtr = paddedQuery)
+        {
+            var vectorBase = (short*)(_ptr + _vectorsOffset);
+            var labelBase = _ptr + _labelsOffset;
+            for (var id = start; id < end; id++)
+            {
+                var dist = DistanceSquaredMappedAvx2(vectorBase + id * Constants.Dim, queryPtr);
+                if (dist >= topDist[4])
+                {
+                    continue;
+                }
+
+                InsertRiskyCandidate(dist, labelBase[id], topDist, topLabel);
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Consider(uint id, ReadOnlySpan<short> query, Span<long> topDist, Span<byte> topLabel)
     {
         var dist = DistanceSquared(id, query, topDist[Constants.K - 1]);
@@ -1049,6 +1098,39 @@ CandidateSearchDone:
         sum += d * d;
 
         return sum;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long DistanceSquaredMappedAvx2(short* vector, short* query)
+    {
+        var diff = Avx2.Subtract(Avx.LoadVector256(query), Avx.LoadVector256(vector));
+        var mask = Vector256.Create(
+            (short)-1,
+            (short)-1,
+            (short)-1,
+            (short)-1,
+            (short)-1,
+            (short)-1,
+            (short)-1,
+            (short)-1,
+            (short)-1,
+            (short)-1,
+            (short)-1,
+            (short)-1,
+            (short)-1,
+            (short)-1,
+            (short)0,
+            (short)0);
+        diff = Avx2.And(diff, mask);
+        var pairs = Avx2.MultiplyAddAdjacent(diff, diff);
+        return (long)pairs.GetElement(0) +
+               pairs.GetElement(1) +
+               pairs.GetElement(2) +
+               pairs.GetElement(3) +
+               pairs.GetElement(4) +
+               pairs.GetElement(5) +
+               pairs.GetElement(6) +
+               pairs.GetElement(7);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

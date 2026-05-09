@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 internal static class BinaryIndexBuilder
 {
     private static ReadOnlySpan<byte> Magic => "RINHA26I"u8;
-    private const uint Version = 2;
+    private const uint Version = 1;
     private const int HeaderLength = 80;
 
     public static void Build(string outputPath, Stream input)
@@ -89,12 +89,6 @@ internal static class BinaryIndexBuilder
                 BinaryPrimitives.WriteInt16LittleEndian(twoBytes, vectorSpan[vectorStart + dim]);
                 output.Write(twoBytes);
             }
-
-            for (var dim = Constants.Dim; dim < Constants.VectorStride; dim++)
-            {
-                BinaryPrimitives.WriteInt16LittleEndian(twoBytes, 0);
-                output.Write(twoBytes);
-            }
         }
 
         var labelsOffset = output.Position;
@@ -140,7 +134,6 @@ internal static class BinaryIndexBuilder
         BinaryPrimitives.WriteUInt32LittleEndian(header[16..], (uint)count);
         BinaryPrimitives.WriteUInt32LittleEndian(header[20..], Constants.Scale);
         BinaryPrimitives.WriteUInt32LittleEndian(header[24..], Constants.BucketCount);
-        BinaryPrimitives.WriteUInt32LittleEndian(header[28..], Constants.VectorStride);
         BinaryPrimitives.WriteUInt64LittleEndian(header[32..], (ulong)vectorsOffset);
         BinaryPrimitives.WriteUInt64LittleEndian(header[40..], (ulong)labelsOffset);
         BinaryPrimitives.WriteUInt64LittleEndian(header[48..], (ulong)bucketOffsetsOffset);

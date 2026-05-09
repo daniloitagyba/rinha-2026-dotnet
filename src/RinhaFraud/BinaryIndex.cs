@@ -309,14 +309,14 @@ CandidateSearchDone:
 
         if (searchParams.Flat || searchParams.ExactFallback == SearchParams.ExactFallbackProfileMiss)
         {
-            var flatFrauds = ClassifyFlat(query);
+            var flatFrauds = ClassifyFlat(query, out var flatCandidates);
             return Diagnostic(
                 flatFrauds,
                 ClassificationPath.FullFlatFallback,
                 profileKey,
                 primaryBucket,
                 candidates: 0,
-                fallbackCandidates: _count,
+                fallbackCandidates: flatCandidates,
                 started);
         }
 
@@ -359,14 +359,14 @@ CandidateSearchDone:
 CandidateSearchDone:
         if (candidates < Constants.K)
         {
-            var flatFrauds = ClassifyFlat(query);
+            var flatFrauds = ClassifyFlat(query, out var flatCandidates);
             return Diagnostic(
                 flatFrauds,
                 ClassificationPath.FullFlatFallback,
                 profileKey,
                 primaryBucket,
                 candidates,
-                _count,
+                flatCandidates,
                 started);
         }
 
@@ -396,25 +396,59 @@ CandidateSearchDone:
                 started);
         }
 
-        var fallbackFrauds = ClassifyFlat(query);
+        var fallbackFrauds = ClassifyFlat(query, out var flatFallbackCandidates);
         return Diagnostic(
             fallbackFrauds,
             ClassificationPath.FullFlatFallback,
             profileKey,
             primaryBucket,
             candidates,
-            _count,
+            flatFallbackCandidates,
             started);
     }
 
     [SkipLocalsInit]
     private int ClassifyFlat(ReadOnlySpan<short> query)
+        => ClassifyFlat(query, long.MaxValue, out _);
+
+    [SkipLocalsInit]
+    private int ClassifyFlat(ReadOnlySpan<short> query, long seedCutoff)
+        => ClassifyFlat(query, seedCutoff, out _);
+
+    [SkipLocalsInit]
+    private int ClassifyFlat(ReadOnlySpan<short> query, out int scannedCandidates)
+        => ClassifyFlat(query, long.MaxValue, out scannedCandidates);
+
+    [SkipLocalsInit]
+    private int ClassifyFlat(ReadOnlySpan<short> query, long seedCutoff, out int scannedCandidates)
     {
         Span<long> topDist = stackalloc long[Constants.K];
         Span<byte> topLabel = stackalloc byte[Constants.K];
         topDist.Fill(long.MaxValue);
+        scannedCandidates = 0;
 
-        ConsiderCandidateRange(query, 0, (uint)_count, topDist, topLabel);
+        var pruneCutoff = seedCutoff;
+        for (var key = 0; key < Constants.BucketCount; key++)
+        {
+            if (pruneCutoff != long.MaxValue && RiskyBucketLowerBound(key, query) > pruneCutoff)
+            {
+                continue;
+            }
+
+            var start = BucketOffset(key);
+            var end = BucketOffset(key + 1);
+            if (start == end)
+            {
+                continue;
+            }
+
+            scannedCandidates += (int)(end - start);
+            ConsiderCandidateRange(query, start, end, topDist, topLabel);
+            if (topDist[Constants.K - 1] < pruneCutoff)
+            {
+                pruneCutoff = topDist[Constants.K - 1];
+            }
+        }
 
         return CountFrauds(topLabel);
     }
@@ -440,7 +474,7 @@ CandidateSearchDone:
         {
             ConsiderRiskyCompactRange(query, 0, _riskyFallbackLabels.Length, topDist, topLabel);
             var compactFrauds = CountFrauds(topLabel);
-            return allowFullTiebreak && NeedsFullRiskyTiebreak(query, compactFrauds) ? ClassifyFlat(query) : compactFrauds;
+            return allowFullTiebreak && NeedsFullRiskyTiebreak(query, compactFrauds) ? ClassifyFlat(query, topDist[Constants.K - 1]) : compactFrauds;
         }
 
         foreach (var id in _riskyFallbackIds)
@@ -449,7 +483,7 @@ CandidateSearchDone:
         }
 
         var frauds = CountFrauds(topLabel);
-        return allowFullTiebreak && NeedsFullRiskyTiebreak(query, frauds) ? ClassifyFlat(query) : frauds;
+        return allowFullTiebreak && NeedsFullRiskyTiebreak(query, frauds) ? ClassifyFlat(query, topDist[Constants.K - 1]) : frauds;
     }
 
     [SkipLocalsInit]
@@ -459,8 +493,7 @@ CandidateSearchDone:
         if (RiskyFallbackCount < Constants.K)
         {
             usedFullFlat = true;
-            fallbackCandidates = _count;
-            return ClassifyFlat(query);
+            return ClassifyFlat(query, out fallbackCandidates);
         }
 
         Span<long> topDist = stackalloc long[Constants.K];
@@ -480,8 +513,9 @@ CandidateSearchDone:
             if (allowFullTiebreak && NeedsFullRiskyTiebreak(query, compactFrauds))
             {
                 usedFullFlat = true;
-                fallbackCandidates += _count;
-                return ClassifyFlat(query);
+                var flatFrauds = ClassifyFlat(query, topDist[Constants.K - 1], out var flatCandidates);
+                fallbackCandidates += flatCandidates;
+                return flatFrauds;
             }
 
             return compactFrauds;
@@ -497,8 +531,9 @@ CandidateSearchDone:
         if (allowFullTiebreak && NeedsFullRiskyTiebreak(query, frauds))
         {
             usedFullFlat = true;
-            fallbackCandidates += _count;
-            return ClassifyFlat(query);
+            var flatFrauds = ClassifyFlat(query, topDist[Constants.K - 1], out var flatCandidates);
+            fallbackCandidates += flatCandidates;
+            return flatFrauds;
         }
 
         return frauds;
@@ -560,8 +595,9 @@ CandidateSearchDone:
         if (allowFullTiebreak && NeedsFullRiskyTiebreak(query, frauds))
         {
             usedFullFlat = true;
-            fallbackCandidates += _count;
-            return ClassifyFlat(query);
+            var flatFrauds = ClassifyFlat(query, topDist[Constants.K - 1], out var flatCandidates);
+            fallbackCandidates += flatCandidates;
+            return flatFrauds;
         }
 
         return frauds;
@@ -649,8 +685,9 @@ CandidateSearchDone:
         if (allowFullTiebreak && NeedsFullRiskyTiebreak(query, frauds))
         {
             usedFullFlat = true;
-            fallbackCandidates += _count;
-            return ClassifyFlat(query);
+            var flatFrauds = ClassifyFlat(query, topDist[Constants.K - 1], out var flatCandidates);
+            fallbackCandidates += flatCandidates;
+            return flatFrauds;
         }
 
         return frauds;

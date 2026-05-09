@@ -9,6 +9,7 @@
     <PublishAot>true</PublishAot>
     <StripSymbols>true</StripSymbols>
     <OptimizationPreference>Speed</OptimizationPreference>
+    <IlcInstructionSet>avx2</IlcInstructionSet>
     <NuGetAudit>false</NuGetAudit>
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>

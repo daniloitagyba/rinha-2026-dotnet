@@ -14,17 +14,13 @@
 #include <unistd.h>
 
 #define BUFFER_SIZE 16384
-#define DEFAULT_BACKEND_COUNT 2
-#define MAX_BACKENDS 4
+#define BACKEND_COUNT 2
 #define MAX_EVENTS 1024
 
-static const char *backend_paths[MAX_BACKENDS] = {
+static const char *backend_paths[BACKEND_COUNT] = {
     "/sockets/api1.sock",
     "/sockets/api2.sock",
-    "/sockets/api3.sock",
-    "/sockets/api4.sock",
 };
-static unsigned int backend_count = DEFAULT_BACKEND_COUNT;
 
 typedef struct connection connection_t;
 
@@ -74,13 +70,13 @@ static void set_small_socket_buffers(int fd) {
 
 static unsigned int choose_backend(void) {
     unsigned int backend = next_backend;
-    next_backend = (next_backend + 1) % backend_count;
+    next_backend = (next_backend + 1) % BACKEND_COUNT;
     return backend;
 }
 
 static int connect_backend(unsigned int start) {
-    for (unsigned int attempt = 0; attempt < backend_count; attempt++) {
-        unsigned int index = (start + attempt) % backend_count;
+    for (unsigned int attempt = 0; attempt < BACKEND_COUNT; attempt++) {
+        unsigned int index = (start + attempt) % BACKEND_COUNT;
         int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
         if (fd < 0) {
             continue;
@@ -100,18 +96,6 @@ static int connect_backend(unsigned int start) {
     }
 
     return -1;
-}
-
-static void init_backends(void) {
-    const char *count_env = getenv("BACKEND_COUNT");
-    if (count_env == NULL || *count_env == '\0') {
-        return;
-    }
-
-    int configured_count = atoi(count_env);
-    if (configured_count >= DEFAULT_BACKEND_COUNT && configured_count <= MAX_BACKENDS) {
-        backend_count = (unsigned int)configured_count;
-    }
 }
 
 static int flush_buffer(int fd, unsigned char *buffer, size_t *offset, size_t *length) {
@@ -385,7 +369,6 @@ static int create_listener(int port) {
 
 int main(void) {
     signal(SIGPIPE, SIG_IGN);
-    init_backends();
 
     int port = 9999;
     const char *port_env = getenv("LB_PORT");
@@ -422,7 +405,7 @@ int main(void) {
         return 1;
     }
 
-    fprintf(stderr, "serving epoll tcp proxy on 0.0.0.0:%d with %u backends\n", port, backend_count);
+    fprintf(stderr, "serving epoll tcp proxy on 0.0.0.0:%d\n", port);
 
     struct epoll_event events[MAX_EVENTS];
     for (;;) {

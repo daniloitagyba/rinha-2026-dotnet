@@ -27,6 +27,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private byte* _ptr;
     private readonly long _length;
     private readonly int _count;
+    private readonly int _vectorStride;
     private readonly long _vectorsOffset;
     private readonly long _labelsOffset;
     private readonly long _bucketOffsetsOffset;
@@ -53,6 +54,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         byte* ptr,
         long length,
         int count,
+        int vectorStride,
         long vectorsOffset,
         long labelsOffset,
         long bucketOffsetsOffset,
@@ -76,6 +78,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _ptr = ptr;
         _length = length;
         _count = count;
+        _vectorStride = vectorStride;
         _vectorsOffset = vectorsOffset;
         _labelsOffset = labelsOffset;
         _bucketOffsetsOffset = bucketOffsetsOffset;
@@ -126,16 +129,21 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var count = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(header[16..]));
             var scale = BinaryPrimitives.ReadUInt32LittleEndian(header[20..]);
             var bucketCount = BinaryPrimitives.ReadUInt32LittleEndian(header[24..]);
+            var vectorStride = version >= 2
+                ? checked((int)BinaryPrimitives.ReadUInt32LittleEndian(header[28..]))
+                : Constants.Dim;
             var vectorsOffset = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[32..]));
             var labelsOffset = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[40..]));
             var bucketOffsetsOffset = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[48..]));
             var bucketItemsOffset = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[56..]));
             var fileLength = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[64..]));
 
-            if (version != 1 ||
+            if ((version != 1 && version != 2) ||
                 dim != Constants.Dim ||
                 scale != Constants.Scale ||
-                bucketCount != Constants.BucketCount)
+                bucketCount != Constants.BucketCount ||
+                vectorStride < Constants.Dim ||
+                vectorStride > Constants.VectorStride)
             {
                 throw new InvalidOperationException("unsupported index version or shape");
             }
@@ -145,7 +153,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 throw new InvalidOperationException("index file length mismatch");
             }
 
-            var vectorsEnd = vectorsOffset + count * Constants.Dim * 2L;
+            var vectorsEnd = vectorsOffset + count * vectorStride * 2L;
             var labelsEnd = labelsOffset + count;
             var bucketOffsetsEnd = bucketOffsetsOffset + (Constants.BucketCount + 1L) * 4L;
             var bucketItemsEnd = bucketItemsOffset + count * 4L;
@@ -154,12 +162,13 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 throw new InvalidOperationException("index offsets out of bounds");
             }
 
-            BuildProfileStats(ptr, count, vectorsOffset, labelsOffset, out var profileCounts, out var profileLabelMasks);
+            BuildProfileStats(ptr, count, vectorStride, vectorsOffset, labelsOffset, out var profileCounts, out var profileLabelMasks);
             var riskyFallbackFilter = RiskyFallbackFilter.FromEnvironment();
             var useRiskyCompact = EnvBool("RISKY_COMPACT", true);
             BuildRiskyFallbackIndex(
                 ptr,
                 count,
+                vectorStride,
                 vectorsOffset,
                 labelsOffset,
                 in riskyFallbackFilter,
@@ -182,6 +191,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 ptr,
                 fileLength,
                 count,
+                vectorStride,
                 vectorsOffset,
                 labelsOffset,
                 bucketOffsetsOffset,
@@ -967,7 +977,9 @@ CandidateSearchDone:
             var labelBase = _ptr + _labelsOffset;
             for (var id = start; id < end; id++)
             {
-                var dist = DistanceSquaredMappedAvx2(vectorBase + id * Constants.Dim, queryPtr);
+                var dist = _vectorStride == Constants.VectorStride
+                    ? DistanceSquaredMappedAvx2(vectorBase + id * _vectorStride, queryPtr)
+                    : DistanceSquaredMappedMaskedAvx2(vectorBase + id * _vectorStride, queryPtr);
                 if (dist >= topDist[4])
                 {
                     continue;
@@ -1038,7 +1050,7 @@ CandidateSearchDone:
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private long DistanceSquared(uint id, ReadOnlySpan<short> query, long cutoff)
     {
-        var vector = _ptr + _vectorsOffset + id * Constants.Dim * 2L;
+        var vector = _ptr + _vectorsOffset + id * _vectorStride * 2L;
         ref var q = ref MemoryMarshal.GetReference(query);
         long sum = 0;
 
@@ -1102,6 +1114,21 @@ CandidateSearchDone:
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static long DistanceSquaredMappedAvx2(short* vector, short* query)
+    {
+        var diff = Avx2.Subtract(Avx.LoadVector256(query), Avx.LoadVector256(vector));
+        var pairs = Avx2.MultiplyAddAdjacent(diff, diff);
+        return (long)pairs.GetElement(0) +
+               pairs.GetElement(1) +
+               pairs.GetElement(2) +
+               pairs.GetElement(3) +
+               pairs.GetElement(4) +
+               pairs.GetElement(5) +
+               pairs.GetElement(6) +
+               pairs.GetElement(7);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long DistanceSquaredMappedMaskedAvx2(short* vector, short* query)
     {
         var diff = Avx2.Subtract(Avx.LoadVector256(query), Avx.LoadVector256(vector));
         var mask = Vector256.Create(
@@ -1239,6 +1266,7 @@ CandidateSearchDone:
     private static void BuildProfileStats(
         byte* ptr,
         int count,
+        int vectorStride,
         long vectorsOffset,
         long labelsOffset,
         out ushort[] profileCounts,
@@ -1249,7 +1277,7 @@ CandidateSearchDone:
 
         for (uint id = 0; id < count; id++)
         {
-            var vector = ptr + vectorsOffset + id * Constants.Dim * 2L;
+            var vector = ptr + vectorsOffset + id * vectorStride * 2L;
             var key = ProfileKey(vector);
             if (profileCounts[key] < ushort.MaxValue)
             {
@@ -1264,6 +1292,7 @@ CandidateSearchDone:
     private static void BuildRiskyFallbackIndex(
         byte* ptr,
         int count,
+        int vectorStride,
         long vectorsOffset,
         long labelsOffset,
         in RiskyFallbackFilter filter,
@@ -1283,7 +1312,7 @@ CandidateSearchDone:
 
         for (uint id = 0; id < count; id++)
         {
-            var vector = ptr + vectorsOffset + id * Constants.Dim * 2L;
+            var vector = ptr + vectorsOffset + id * vectorStride * 2L;
             if (IsRiskyFallbackReference(vector, in filter))
             {
                 var key = BucketKey(vector);
@@ -1342,7 +1371,7 @@ CandidateSearchDone:
             {
                 var fineKey = fineKeyList[i];
                 var writePosition = writePositions[fineKey]++;
-                var vector = ptr + vectorsOffset + idList[i] * Constants.Dim * 2L;
+                var vector = ptr + vectorsOffset + idList[i] * vectorStride * 2L;
                 var vectorStart = writePosition * RiskyVectorStride;
                 for (var dim = 0; dim < Constants.Dim; dim++)
                 {

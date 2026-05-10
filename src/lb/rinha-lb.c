@@ -27,6 +27,7 @@ typedef struct connection connection_t;
 typedef struct fd_state {
     int fd;
     int is_client;
+    uint32_t events;
     connection_t *connection;
 } fd_state_t;
 
@@ -183,9 +184,9 @@ static void reap_closed(void) {
     }
 }
 
-static int fd_events(const fd_state_t *state) {
+static uint32_t fd_events(const fd_state_t *state) {
     const connection_t *conn = state->connection;
-    int events = EPOLLERR | EPOLLHUP | EPOLLRDHUP;
+    uint32_t events = EPOLLERR | EPOLLHUP | EPOLLRDHUP;
 
     if (state->is_client) {
         if (conn->c2b_len == 0) {
@@ -209,19 +210,35 @@ static int fd_events(const fd_state_t *state) {
 }
 
 static int update_fd(int epoll_fd, fd_state_t *state) {
+    uint32_t events = fd_events(state);
+    if (state->events == events) {
+        return 0;
+    }
+
     struct epoll_event event;
     memset(&event, 0, sizeof(event));
-    event.events = fd_events(state);
+    event.events = events;
     event.data.ptr = state;
-    return epoll_ctl(epoll_fd, EPOLL_CTL_MOD, state->fd, &event);
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, state->fd, &event) < 0) {
+        return -1;
+    }
+
+    state->events = events;
+    return 0;
 }
 
 static int add_fd(int epoll_fd, fd_state_t *state) {
+    uint32_t events = fd_events(state);
     struct epoll_event event;
     memset(&event, 0, sizeof(event));
-    event.events = fd_events(state);
+    event.events = events;
     event.data.ptr = state;
-    return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, state->fd, &event);
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, state->fd, &event) < 0) {
+        return -1;
+    }
+
+    state->events = events;
+    return 0;
 }
 
 static int update_connection(int epoll_fd, connection_t *conn) {

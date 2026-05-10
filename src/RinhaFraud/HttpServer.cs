@@ -13,13 +13,13 @@ internal static class HttpServer
 {
     private static readonly byte[] ReadyResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:2\r\n\r\nOK"u8.ToArray();
     private static readonly byte[] NotFoundResponseBytes = "HTTP/1.1 404 Not Found\r\nContent-Length:9\r\n\r\nnot found"u8.ToArray();
-    private static readonly byte[] DefaultResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:35\r\n\r\n{\"approved\":true,\"fraud_score\":0.0}"u8.ToArray();
-    private static readonly byte[] Approved00ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:35\r\n\r\n{\"approved\":true,\"fraud_score\":0.0}"u8.ToArray();
+    private static readonly byte[] DefaultResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:33\r\n\r\n{\"approved\":true,\"fraud_score\":0}"u8.ToArray();
+    private static readonly byte[] Approved00ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:33\r\n\r\n{\"approved\":true,\"fraud_score\":0}"u8.ToArray();
     private static readonly byte[] Approved02ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:35\r\n\r\n{\"approved\":true,\"fraud_score\":0.2}"u8.ToArray();
     private static readonly byte[] Approved04ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:35\r\n\r\n{\"approved\":true,\"fraud_score\":0.4}"u8.ToArray();
     private static readonly byte[] Denied06ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:36\r\n\r\n{\"approved\":false,\"fraud_score\":0.6}"u8.ToArray();
     private static readonly byte[] Denied08ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:36\r\n\r\n{\"approved\":false,\"fraud_score\":0.8}"u8.ToArray();
-    private static readonly byte[] Denied10ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:36\r\n\r\n{\"approved\":false,\"fraud_score\":1.0}"u8.ToArray();
+    private static readonly byte[] Denied10ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:34\r\n\r\n{\"approved\":false,\"fraud_score\":1}"u8.ToArray();
     private static ReadOnlySpan<byte> ReadyResponse => ReadyResponseBytes;
     private static ReadOnlySpan<byte> NotFoundResponse => NotFoundResponseBytes;
     private static ReadOnlySpan<byte> DefaultResponse => DefaultResponseBytes;

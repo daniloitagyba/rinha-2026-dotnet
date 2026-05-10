@@ -120,6 +120,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${RISKY_FINE_BUCKETS:-}" ] || \
    [ -n "${RISKY_SIMD:-}" ] || \
    [ -n "${SOCKETS_MOUNT:-}" ] || \
+   [ -n "${LB_WORKERS:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
    [ -n "${SERVER_MODE:-}" ] || \
    [ -n "${TP_MIN_THREADS:-}" ] || \
@@ -132,13 +133,19 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
   OVERRIDE_FILE="${OVERRIDE_FILE_PATH:-${TMPDIR:-/tmp}/${PROJECT_NAME}.override.yml}"
   {
     echo "services:"
-    if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ]; then
+    if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ] || [ -n "${LB_WORKERS:-}" ]; then
       echo "  lb:"
+      if [ -n "${LB_WORKERS:-}" ]; then
+        echo "    environment:"
+        echo "      LB_WORKERS: \"$LB_WORKERS\""
+      fi
+      if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ]; then
       echo "    deploy:"
       echo "      resources:"
       echo "        limits:"
       [ -n "${LB_CPU:-}" ] && echo "          cpus: \"$LB_CPU\""
       [ -n "${LB_MEMORY:-}" ] && echo "          memory: \"$LB_MEMORY\""
+      fi
     fi
 
     if [ -n "${SOCKETS_MOUNT:-}" ]; then

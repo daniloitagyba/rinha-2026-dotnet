@@ -13,7 +13,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#define BUFFER_SIZE 4096
+#define BUFFER_SIZE 16384
 #define BACKEND_COUNT 2
 #define MAX_EVENTS 1024
 
@@ -63,7 +63,7 @@ static void set_tcp_nodelay(int fd) {
 }
 
 static void set_small_socket_buffers(int fd) {
-    int value = 8192;
+    int value = 16384;
     (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, sizeof(value));
     (void)setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &value, sizeof(value));
 }

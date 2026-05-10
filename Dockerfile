@@ -12,7 +12,7 @@ RUN case "$TARGETARCH" in \
     esac \
     && dotnet publish src/RinhaFraud/RinhaFraud.csproj -c Release -r "$RID" -o /out/app
 RUN mkdir -p /out/lb \
-    && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -fomit-frame-pointer -fno-stack-protector -fno-plt -pthread -o /out/lb/rinha-lb src/lb/rinha-lb.c
+    && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -pthread -o /out/lb/rinha-lb src/lb/rinha-lb.c
 RUN mkdir -p /out/data \
     && if [ -f resources/references.json.gz ]; then \
          gzip -dc resources/references.json.gz | /out/app/RinhaFraud build-index /out/data/references.idx ; \

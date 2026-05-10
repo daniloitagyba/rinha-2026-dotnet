@@ -33,7 +33,6 @@ typedef struct fd_state {
 struct connection {
     int client_fd;
     int backend_fd;
-    unsigned int backend_index;
     int closed;
     fd_state_t client;
     fd_state_t backend;
@@ -47,7 +46,6 @@ struct connection {
 };
 
 static unsigned int next_backend = 0;
-static unsigned int active_backend_connections[BACKEND_COUNT];
 static connection_t *closed_head = NULL;
 
 static int set_nonblocking(int fd) {
@@ -71,22 +69,12 @@ static void set_small_socket_buffers(int fd) {
 }
 
 static unsigned int choose_backend(void) {
-    unsigned int best = next_backend;
-    unsigned int best_active = active_backend_connections[best];
-    for (unsigned int attempt = 1; attempt < BACKEND_COUNT; attempt++) {
-        unsigned int index = (next_backend + attempt) % BACKEND_COUNT;
-        unsigned int active = active_backend_connections[index];
-        if (active < best_active) {
-            best = index;
-            best_active = active;
-        }
-    }
-
-    next_backend = (best + 1) % BACKEND_COUNT;
-    return best;
+    unsigned int backend = next_backend;
+    next_backend = (next_backend + 1) % BACKEND_COUNT;
+    return backend;
 }
 
-static int connect_backend(unsigned int start, unsigned int *selected_index) {
+static int connect_backend(unsigned int start) {
     for (unsigned int attempt = 0; attempt < BACKEND_COUNT; attempt++) {
         unsigned int index = (start + attempt) % BACKEND_COUNT;
         int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
@@ -101,7 +89,6 @@ static int connect_backend(unsigned int start, unsigned int *selected_index) {
 
         if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
             set_small_socket_buffers(fd);
-            *selected_index = index;
             return fd;
         }
 
@@ -176,10 +163,6 @@ static void schedule_close(int epoll_fd, connection_t *conn) {
     }
 
     conn->closed = 1;
-    if (conn->backend_index < BACKEND_COUNT && active_backend_connections[conn->backend_index] > 0) {
-        active_backend_connections[conn->backend_index]--;
-    }
-
     (void)epoll_ctl(epoll_fd, EPOLL_CTL_DEL, conn->client_fd, NULL);
     (void)epoll_ctl(epoll_fd, EPOLL_CTL_DEL, conn->backend_fd, NULL);
     close(conn->client_fd);
@@ -272,8 +255,7 @@ static void accept_clients(int epoll_fd, int listener) {
         set_tcp_nodelay(client_fd);
         set_small_socket_buffers(client_fd);
 
-        unsigned int backend_index = 0;
-        int backend_fd = connect_backend(choose_backend(), &backend_index);
+        int backend_fd = connect_backend(choose_backend());
         if (backend_fd < 0) {
             close(client_fd);
             continue;
@@ -288,14 +270,12 @@ static void accept_clients(int epoll_fd, int listener) {
 
         conn->client_fd = client_fd;
         conn->backend_fd = backend_fd;
-        conn->backend_index = backend_index;
         conn->client.fd = client_fd;
         conn->client.is_client = 1;
         conn->client.connection = conn;
         conn->backend.fd = backend_fd;
         conn->backend.is_client = 0;
         conn->backend.connection = conn;
-        active_backend_connections[backend_index]++;
 
         if (add_fd(epoll_fd, &conn->client) < 0 || add_fd(epoll_fd, &conn->backend) < 0) {
             schedule_close(epoll_fd, conn);

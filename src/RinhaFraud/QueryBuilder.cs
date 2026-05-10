@@ -584,20 +584,6 @@ internal static class QueryBuilder
 
         pos++;
         start = pos;
-        var remaining = source[pos..];
-        var quote = remaining.IndexOf((byte)'"');
-        if (quote < 0)
-        {
-            return false;
-        }
-
-        if (remaining[..quote].IndexOf((byte)'\\') < 0)
-        {
-            length = quote;
-            pos += quote + 1;
-            return true;
-        }
-
         var escaped = false;
         while ((uint)pos < (uint)source.Length)
         {

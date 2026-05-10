@@ -4,7 +4,7 @@ services:
     platform: linux/amd64
     entrypoint: ["rinha-lb"]
     environment:
-      LB_WORKERS: "2"
+      LB_WORKERS: "3"
     ports:
       - "9999:9999"
     volumes:

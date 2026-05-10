@@ -31,8 +31,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly long _vectorsOffset;
     private readonly long _labelsOffset;
     private readonly long _bucketOffsetsOffset;
-    private readonly ushort[] _profileCounts;
-    private readonly byte[] _profileLabelMasks;
+    private readonly ushort[] _profileStats;
     private readonly uint[] _riskyFallbackIds;
     private readonly short[] _riskyFallbackVectors;
     private readonly byte[] _riskyFallbackLabels;
@@ -57,8 +56,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         long vectorsOffset,
         long labelsOffset,
         long bucketOffsetsOffset,
-        ushort[] profileCounts,
-        byte[] profileLabelMasks,
+        ushort[] profileStats,
         uint[] riskyFallbackIds,
         short[] riskyFallbackVectors,
         byte[] riskyFallbackLabels,
@@ -80,8 +78,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _vectorsOffset = vectorsOffset;
         _labelsOffset = labelsOffset;
         _bucketOffsetsOffset = bucketOffsetsOffset;
-        _profileCounts = profileCounts;
-        _profileLabelMasks = profileLabelMasks;
+        _profileStats = profileStats;
         _riskyFallbackIds = riskyFallbackIds;
         _riskyFallbackVectors = riskyFallbackVectors;
         _riskyFallbackLabels = riskyFallbackLabels;
@@ -155,7 +152,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 throw new InvalidOperationException("index offsets out of bounds");
             }
 
-            BuildProfileStats(ptr, count, vectorsOffset, labelsOffset, out var profileCounts, out var profileLabelMasks);
+            BuildProfileStats(ptr, count, vectorsOffset, labelsOffset, out var profileStats);
             var riskyFallbackFilter = RiskyFallbackFilter.FromEnvironment();
             var useRiskyCompact = EnvBool("RISKY_COMPACT", true);
             BuildRiskyFallbackIndex(
@@ -186,8 +183,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 vectorsOffset,
                 labelsOffset,
                 bucketOffsetsOffset,
-                profileCounts,
-                profileLabelMasks,
+                profileStats,
                 riskyFallbackIds,
                 riskyFallbackVectors,
                 riskyFallbackLabels,
@@ -1011,10 +1007,11 @@ CandidateSearchDone:
         }
 
         var key = ProfileKey(query);
-        var mask = _profileLabelMasks[key];
+        var stat = _profileStats[key];
+        var mask = (byte)(stat >> 8);
         if (mask == LegitMask)
         {
-            if (_profileCounts[key] < searchParams.ProfileLegitMinCount)
+            if ((stat & 0xFF) < searchParams.ProfileLegitMinCount)
             {
                 return false;
             }
@@ -1025,7 +1022,7 @@ CandidateSearchDone:
 
         if (mask == FraudMask)
         {
-            if (_profileCounts[key] < searchParams.ProfileFraudMinCount)
+            if ((stat & 0xFF) < searchParams.ProfileFraudMinCount)
             {
                 return false;
             }
@@ -1339,23 +1336,24 @@ CandidateSearchDone:
         int count,
         long vectorsOffset,
         long labelsOffset,
-        out ushort[] profileCounts,
-        out byte[] profileLabelMasks)
+        out ushort[] profileStats)
     {
-        profileCounts = new ushort[ProfileKeyCount];
-        profileLabelMasks = new byte[ProfileKeyCount];
+        profileStats = new ushort[ProfileKeyCount];
 
         for (uint id = 0; id < count; id++)
         {
             var vector = ptr + vectorsOffset + id * Constants.Dim * 2L;
             var key = ProfileKey(vector);
-            if (profileCounts[key] < ushort.MaxValue)
+            var stat = profileStats[key];
+            var profileCount = stat & 0xFF;
+            if (profileCount < byte.MaxValue)
             {
-                profileCounts[key]++;
+                profileCount++;
             }
 
             var label = *(ptr + labelsOffset + id);
-            profileLabelMasks[key] |= label == 1 ? FraudMask : LegitMask;
+            var mask = (stat >> 8) | (label == 1 ? FraudMask : LegitMask);
+            profileStats[key] = (ushort)((mask << 8) | profileCount);
         }
     }
 

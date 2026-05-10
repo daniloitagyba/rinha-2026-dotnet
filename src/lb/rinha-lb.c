@@ -16,7 +16,6 @@
 #define BUFFER_SIZE 16384
 #define BACKEND_COUNT 2
 #define MAX_EVENTS 1024
-#define EPOLL_BASE_EVENTS (EPOLLERR | EPOLLHUP | EPOLLRDHUP | EPOLLET)
 
 static const char *backend_paths[BACKEND_COUNT] = {
     "/sockets/api1.sock",
@@ -186,7 +185,7 @@ static void reap_closed(void) {
 
 static int fd_events(const fd_state_t *state) {
     const connection_t *conn = state->connection;
-    int events = EPOLL_BASE_EVENTS;
+    int events = EPOLLERR | EPOLLHUP | EPOLLRDHUP;
 
     if (state->is_client) {
         if (conn->c2b_len == 0) {
@@ -397,7 +396,7 @@ int main(void) {
 
     struct epoll_event listener_event;
     memset(&listener_event, 0, sizeof(listener_event));
-    listener_event.events = EPOLLIN | EPOLLET;
+    listener_event.events = EPOLLIN;
     listener_event.data.ptr = &listener_state;
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listener, &listener_event) < 0) {
         perror("epoll_ctl");

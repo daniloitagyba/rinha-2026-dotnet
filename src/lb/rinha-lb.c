@@ -62,15 +62,6 @@ static void set_tcp_nodelay(int fd) {
     (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value));
 }
 
-static void set_tcp_quickack(int fd) {
-#ifdef TCP_QUICKACK
-    int value = 1;
-    (void)setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &value, sizeof(value));
-#else
-    (void)fd;
-#endif
-}
-
 static void set_small_socket_buffers(int fd) {
     int value = 16384;
     (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, sizeof(value));
@@ -262,7 +253,6 @@ static void accept_clients(int epoll_fd, int listener) {
         }
 
         set_tcp_nodelay(client_fd);
-        set_tcp_quickack(client_fd);
         set_small_socket_buffers(client_fd);
 
         int backend_fd = connect_backend(choose_backend());

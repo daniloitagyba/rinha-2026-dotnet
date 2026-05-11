@@ -3,6 +3,7 @@ services:
     image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:0851d1e84526ce2e30b10024b6fd9c7450e3d570
     platform: linux/amd64
     entrypoint: ["rinha-lb"]
+    cpuset: "1"
     ports:
       - "9999:9999"
     volumes:
@@ -25,6 +26,7 @@ services:
   api1:
     image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:0851d1e84526ce2e30b10024b6fd9c7450e3d570
     platform: linux/amd64
+    cpuset: "1"
     environment:
       BIND_ADDR: unix:/sockets/api1.sock
       INDEX_PATH: /app/data/references.idx
@@ -66,6 +68,7 @@ services:
   api2:
     image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:0851d1e84526ce2e30b10024b6fd9c7450e3d570
     platform: linux/amd64
+    cpuset: "1"
     environment:
       BIND_ADDR: unix:/sockets/api2.sock
       INDEX_PATH: /app/data/references.idx

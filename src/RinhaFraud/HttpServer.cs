@@ -6,6 +6,8 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -52,9 +54,14 @@ internal static class HttpServer
             ThreadPool.SetMinThreads(minThreads, minThreads);
         }
 
-        using var listener = CreateListener(bindAddress);
-
         var asyncMode = string.Equals(Environment.GetEnvironmentVariable("SERVER_MODE"), "raw-async", StringComparison.OrdinalIgnoreCase);
+        if (bindAddress.StartsWith("fd:", StringComparison.Ordinal))
+        {
+            ServeFdPassing(bindAddress[3..], index, searchParams, workerCount, keepAliveRequests, keepAliveIdleMs);
+            return;
+        }
+
+        using var listener = CreateListener(bindAddress);
 
         Console.Error.WriteLine(
             $"serving on {bindAddress}, server_mode={(asyncMode ? "raw-async" : "raw")}, tp_min_threads={minThreads}, index={indexPath}, workers={workerCount}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, profile_legit_min_count={searchParams.ProfileLegitMinCount}, profile_fraud_min_count={searchParams.ProfileFraudMinCount}, exact_fallback={searchParams.ExactFallback}, risky_fallback_refs={index.RiskyFallbackCount}");
@@ -189,6 +196,119 @@ internal static class HttpServer
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"connection error: {ex.Message}");
+            }
+            finally
+            {
+                try
+                {
+                    socket?.Dispose();
+                }
+                catch
+                {
+                }
+            }
+        }
+    }
+
+    private static void ServeFdPassing(
+        string controlPath,
+        BinaryIndex index,
+        SearchParams searchParams,
+        int workerCount,
+        int keepAliveRequests,
+        int keepAliveIdleMs)
+    {
+        using var listener = CreateUnixListener(controlPath);
+        var receiverCount = Math.Max(1, EnvInt("FD_RECEIVERS", workerCount));
+        Console.Error.WriteLine(
+            $"serving fd control on {controlPath}, receivers={receiverCount}, index={Environment.GetEnvironmentVariable("INDEX_PATH")}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, risky_fallback_refs={index.RiskyFallbackCount}");
+
+        for (var i = 0; i < receiverCount; i++)
+        {
+            var thread = new Thread(() => AcceptFdControlLoop(listener, index, searchParams, keepAliveRequests, keepAliveIdleMs))
+            {
+                IsBackground = false,
+                Name = $"rinha-fd-receiver-{i}"
+            };
+            thread.Start();
+        }
+
+        Thread.Sleep(Timeout.Infinite);
+    }
+
+    private static void AcceptFdControlLoop(Socket listener, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs)
+    {
+        while (true)
+        {
+            Socket? control = null;
+            try
+            {
+                control = listener.Accept();
+                var acceptedControl = control;
+                var thread = new Thread(() => ReceiveFdLoop(acceptedControl, index, searchParams, keepAliveRequests, keepAliveIdleMs))
+                {
+                    IsBackground = true,
+                    Name = "rinha-fd-control"
+                };
+                thread.Start();
+                control = null;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"fd control accept error: {ex.Message}");
+            }
+            finally
+            {
+                try
+                {
+                    control?.Dispose();
+                }
+                catch
+                {
+                }
+            }
+        }
+    }
+
+    private static void ReceiveFdLoop(Socket control, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs)
+    {
+        using var acceptedControl = control;
+        while (true)
+        {
+            var fd = ReceiveSocketFd(acceptedControl);
+            if (fd < 0)
+            {
+                return;
+            }
+
+            Socket? socket = null;
+            try
+            {
+                socket = new Socket(new SafeSocketHandle((IntPtr)fd, ownsHandle: true));
+                socket.Blocking = true;
+                ConfigureAcceptedSocket(socket, keepAliveIdleMs);
+                ThreadPool.UnsafeQueueUserWorkItem(
+                    static (ConnectionWork work) =>
+                    {
+                        using var accepted = work.Socket;
+                        try
+                        {
+                            HandleConnection(accepted, work.Index, work.SearchParams, work.KeepAliveRequests);
+                        }
+                        catch
+                        {
+                        }
+                    },
+                    new ConnectionWork(socket, index, searchParams, keepAliveRequests),
+                    preferLocal: false);
+                socket = null;
+            }
+            catch
+            {
+                if (socket is null)
+                {
+                    CloseFd(fd);
+                }
             }
             finally
             {
@@ -518,10 +638,7 @@ internal static class HttpServer
         if (bindAddress.StartsWith("unix:", StringComparison.OrdinalIgnoreCase))
         {
             var path = bindAddress[5..];
-            TryDeleteUnixSocket(path);
-            listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-            listener.Bind(new UnixDomainSocketEndPoint(path));
-            TrySetUnixSocketPermissions(path);
+            return CreateUnixListener(path);
         }
         else
         {
@@ -532,6 +649,16 @@ internal static class HttpServer
             listener.Bind(endpoint);
         }
 
+        listener.Listen(4096);
+        return listener;
+    }
+
+    private static Socket CreateUnixListener(string path)
+    {
+        TryDeleteUnixSocket(path);
+        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        listener.Bind(new UnixDomainSocketEndPoint(path));
+        TrySetUnixSocketPermissions(path);
         listener.Listen(4096);
         return listener;
     }
@@ -594,6 +721,86 @@ internal static class HttpServer
         var address = host == "*" ? IPAddress.Any : IPAddress.Parse(host);
         return new IPEndPoint(address, port);
     }
+
+    private static unsafe int ReceiveSocketFd(Socket control)
+    {
+        var sockfd = (int)control.SafeHandle.DangerousGetHandle();
+        byte data = 0;
+        Span<byte> controlBuffer = stackalloc byte[24];
+
+        fixed (byte* controlPtr = controlBuffer)
+        {
+            var iov = new IOVec
+            {
+                Base = &data,
+                Len = 1
+            };
+            var msg = new MsgHdr
+            {
+                Iov = &iov,
+                IovLen = 1,
+                Control = controlPtr,
+                ControlLen = (nuint)controlBuffer.Length
+            };
+
+            var received = recvmsg(sockfd, &msg, 0);
+            if (received <= 0)
+            {
+                return -1;
+            }
+
+            if (msg.ControlLen < 20)
+            {
+                return -1;
+            }
+
+            var cmsgLen = Unsafe.ReadUnaligned<nuint>(controlPtr);
+            var cmsgLevel = Unsafe.ReadUnaligned<int>(controlPtr + 8);
+            var cmsgType = Unsafe.ReadUnaligned<int>(controlPtr + 12);
+            if (cmsgLen < 20 || cmsgLevel != SolSocket || cmsgType != ScmRights)
+            {
+                return -1;
+            }
+
+            return Unsafe.ReadUnaligned<int>(controlPtr + 16);
+        }
+    }
+
+    private static void CloseFd(int fd)
+    {
+        if (fd >= 0)
+        {
+            _ = close(fd);
+        }
+    }
+
+    private const int SolSocket = 1;
+    private const int ScmRights = 1;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private unsafe struct IOVec
+    {
+        public void* Base;
+        public nuint Len;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private unsafe struct MsgHdr
+    {
+        public void* Name;
+        public uint NameLen;
+        public void* Iov;
+        public nuint IovLen;
+        public void* Control;
+        public nuint ControlLen;
+        public int Flags;
+    }
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern unsafe nint recvmsg(int sockfd, MsgHdr* msg, int flags);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int close(int fd);
 
     private static bool EnvBool(string name, bool fallback)
     {

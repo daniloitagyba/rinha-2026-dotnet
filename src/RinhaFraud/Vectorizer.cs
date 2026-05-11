@@ -4,7 +4,7 @@ using System;
 
 internal static class Vectorizer
 {
-    private static readonly ushort[] NeighborKeyOrders = BuildNeighborKeyOrders();
+    private static ushort[]? NeighborKeyOrders;
 
     public static void Vectorize(in Payload payload, Span<short> output)
     {
@@ -134,7 +134,8 @@ internal static class Vectorizer
 
     internal static ReadOnlySpan<ushort> NeighborKeyOrderForBucketKey(int bucketKey)
     {
-        return NeighborKeyOrders.AsSpan(bucketKey * Constants.BucketCount, Constants.BucketCount);
+        var orders = NeighborKeyOrders ??= BuildNeighborKeyOrders();
+        return orders.AsSpan(bucketKey * Constants.BucketCount, Constants.BucketCount);
     }
 
     private static double AmountVsAverage(double amount, double average)
@@ -185,7 +186,7 @@ internal static class Vectorizer
         return count;
     }
 
-    private static ushort[] BuildNeighborKeyOrders()
+    internal static ushort[] BuildNeighborKeyOrders()
     {
         var orders = new ushort[Constants.BucketCount * Constants.BucketCount];
         var buffer = new ushort[Constants.BucketCount];

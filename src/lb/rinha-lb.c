@@ -22,6 +22,11 @@ static const char *backend_paths[BACKEND_COUNT] = {
     "/sockets/api2.sock",
 };
 
+static const char *control_paths[BACKEND_COUNT] = {
+    "/sockets/api1.sock.ctrl",
+    "/sockets/api2.sock.ctrl",
+};
+
 typedef struct connection connection_t;
 
 typedef struct fd_state {
@@ -47,6 +52,7 @@ struct connection {
 
 static unsigned int next_backend = 0;
 static connection_t *closed_head = NULL;
+static int control_fds[BACKEND_COUNT] = {-1, -1};
 
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -208,6 +214,72 @@ static int fd_events(const fd_state_t *state) {
     return events;
 }
 
+static int connect_control(unsigned int index) {
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, control_paths[index], sizeof(addr.sun_path) - 1);
+
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+        return fd;
+    }
+
+    close(fd);
+    return -1;
+}
+
+static int ensure_control(unsigned int index) {
+    if (control_fds[index] >= 0) {
+        return control_fds[index];
+    }
+
+    int fd = connect_control(index);
+    control_fds[index] = fd;
+    return fd;
+}
+
+static int send_fd(int control_fd, int fd_to_send) {
+    char data = 0;
+    struct iovec io;
+    io.iov_base = &data;
+    io.iov_len = 1;
+
+    char cmsgbuf[CMSG_SPACE(sizeof(int))];
+    memset(cmsgbuf, 0, sizeof(cmsgbuf));
+
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = &io;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cmsgbuf;
+    msg.msg_controllen = sizeof(cmsgbuf);
+
+    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(cmsg), &fd_to_send, sizeof(int));
+    msg.msg_controllen = cmsg->cmsg_len;
+
+    for (;;) {
+        ssize_t sent = sendmsg(control_fd, &msg, MSG_NOSIGNAL);
+        if (sent == 1) {
+            return 0;
+        }
+
+        if (sent < 0 && errno == EINTR) {
+            continue;
+        }
+
+        return -1;
+    }
+}
+
 static int update_fd(int epoll_fd, fd_state_t *state) {
     struct epoll_event event;
     memset(&event, 0, sizeof(event));
@@ -281,6 +353,105 @@ static void accept_clients(int epoll_fd, int listener) {
             schedule_close(epoll_fd, conn);
         }
     }
+}
+
+static void accept_clients_fdpass(int listener) {
+    for (;;) {
+        int client_fd = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
+        if (client_fd < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return;
+            }
+
+            perror("accept");
+            return;
+        }
+
+        set_tcp_nodelay(client_fd);
+        set_small_socket_buffers(client_fd);
+
+        unsigned int start = choose_backend();
+        int delivered = 0;
+        for (unsigned int attempt = 0; attempt < BACKEND_COUNT; attempt++) {
+            unsigned int index = (start + attempt) % BACKEND_COUNT;
+            int control_fd = ensure_control(index);
+            if (control_fd >= 0 && send_fd(control_fd, client_fd) == 0) {
+                delivered = 1;
+                break;
+            }
+
+            if (control_fds[index] >= 0) {
+                close(control_fds[index]);
+                control_fds[index] = -1;
+            }
+        }
+
+        close(client_fd);
+        if (!delivered) {
+            continue;
+        }
+    }
+}
+
+static int run_fdpass(int listener, int port) {
+    int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+    if (epoll_fd < 0) {
+        perror("epoll_create1");
+        close(listener);
+        return 1;
+    }
+
+    fd_state_t listener_state;
+    memset(&listener_state, 0, sizeof(listener_state));
+    listener_state.fd = listener;
+    listener_state.is_client = -1;
+
+    struct epoll_event listener_event;
+    memset(&listener_event, 0, sizeof(listener_event));
+    listener_event.events = EPOLLIN;
+    listener_event.data.ptr = &listener_state;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listener, &listener_event) < 0) {
+        perror("epoll_ctl");
+        close(listener);
+        close(epoll_fd);
+        return 1;
+    }
+
+    fprintf(stderr, "serving fdpass load balancer on 0.0.0.0:%d\n", port);
+
+    struct epoll_event events[MAX_EVENTS];
+    for (;;) {
+        int ready = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            perror("epoll_wait");
+            break;
+        }
+
+        for (int i = 0; i < ready; i++) {
+            if (events[i].data.ptr == &listener_state) {
+                accept_clients_fdpass(listener);
+            }
+        }
+    }
+
+    close(listener);
+    close(epoll_fd);
+    for (int i = 0; i < BACKEND_COUNT; i++) {
+        if (control_fds[i] >= 0) {
+            close(control_fds[i]);
+            control_fds[i] = -1;
+        }
+    }
+
+    return 1;
 }
 
 static void process_proxy_event(int epoll_fd, fd_state_t *state, uint32_t events) {
@@ -380,6 +551,11 @@ int main(void) {
     if (listener < 0) {
         perror("listen");
         return 1;
+    }
+
+    const char *mode = getenv("LB_MODE");
+    if (mode != NULL && strcmp(mode, "fdpass") == 0) {
+        return run_fdpass(listener, port);
     }
 
     int epoll_fd = epoll_create1(EPOLL_CLOEXEC);

@@ -14,6 +14,7 @@ using System.Runtime.Intrinsics.X86;
 internal unsafe sealed class BinaryIndex : IDisposable
 {
     private static ReadOnlySpan<byte> Magic => "RINHA26I"u8;
+    private static ReadOnlySpan<byte> ExtensionMagic => "R26XDIR1"u8;
     private const int HeaderLength = 80;
     private const int ProfileKeyCount = 1 << 22;
     private const int RiskyVectorStride = 16;
@@ -22,6 +23,18 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private const int RiskyFineBucketCount = Constants.BucketCount << RiskyFineExtraBits;
     private const byte LegitMask = 1;
     private const byte FraudMask = 2;
+    private const uint SectionProfileCounts = 1;
+    private const uint SectionProfileMasks = 2;
+    private const uint SectionNeighborOrders = 3;
+    private const uint SectionRiskyMeta = 4;
+    private const uint SectionRiskyVectors = 5;
+    private const uint SectionRiskyLabels = 6;
+    private const uint SectionRiskyBucketOffsets = 7;
+    private const uint SectionRiskyFineBucketOffsets = 8;
+    private const uint SectionRiskyCoarseFineOffsets = 9;
+    private const uint SectionRiskyFineKeys = 10;
+    private const uint SectionRiskySoa = 11;
+    private const uint SectionIvfOrders = 12;
 
     private readonly MemoryMappedFile _mappedFile;
     private readonly MemoryMappedViewAccessor _accessor;
@@ -31,6 +44,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly long _vectorsOffset;
     private readonly long _labelsOffset;
     private readonly long _bucketOffsetsOffset;
+    private readonly long _profileCountsOffset;
+    private readonly long _profileLabelMasksOffset;
     private readonly ushort[] _profileCounts;
     private readonly byte[] _profileLabelMasks;
     private readonly uint[] _riskyFallbackIds;
@@ -40,13 +55,27 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly int[] _riskyFineBucketOffsets;
     private readonly int[] _riskyCoarseFineOffsets;
     private readonly int[] _riskyFineKeys;
+    private readonly long _neighborOrdersOffset;
+    private readonly long _ivfOrdersOffset;
+    private readonly int _riskyMappedCount;
+    private readonly int _riskyMappedFineKeyCount;
+    private readonly long _riskyMappedVectorsOffset;
+    private readonly long _riskyMappedLabelsOffset;
+    private readonly long _riskyMappedBucketOffsetsOffset;
+    private readonly long _riskyMappedFineBucketOffsetsOffset;
+    private readonly long _riskyMappedCoarseFineOffsetsOffset;
+    private readonly long _riskyMappedFineKeysOffset;
+    private readonly long _riskyMappedSoaOffset;
     private readonly bool _useRiskyBuckets;
     private readonly bool _useRiskyFineBuckets;
     private readonly bool _useRiskyCompact;
     private readonly bool _useRiskySimd;
+    private readonly bool _useRiskySoa;
+    private readonly bool _useIvfOrder;
     private readonly bool _useMappedSimd;
 
-    public int RiskyFallbackCount => _useRiskyCompact ? _riskyFallbackLabels.Length : _riskyFallbackIds.Length;
+    public int RiskyFallbackCount => HasMappedRisky ? _riskyMappedCount : _useRiskyCompact ? _riskyFallbackLabels.Length : _riskyFallbackIds.Length;
+    private bool HasMappedRisky => _riskyMappedCount > 0;
 
     private BinaryIndex(
         MemoryMappedFile mappedFile,
@@ -57,6 +86,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
         long vectorsOffset,
         long labelsOffset,
         long bucketOffsetsOffset,
+        long profileCountsOffset,
+        long profileLabelMasksOffset,
         ushort[] profileCounts,
         byte[] profileLabelMasks,
         uint[] riskyFallbackIds,
@@ -66,10 +97,23 @@ internal unsafe sealed class BinaryIndex : IDisposable
         int[] riskyFineBucketOffsets,
         int[] riskyCoarseFineOffsets,
         int[] riskyFineKeys,
+        long neighborOrdersOffset,
+        long ivfOrdersOffset,
+        int riskyMappedCount,
+        int riskyMappedFineKeyCount,
+        long riskyMappedVectorsOffset,
+        long riskyMappedLabelsOffset,
+        long riskyMappedBucketOffsetsOffset,
+        long riskyMappedFineBucketOffsetsOffset,
+        long riskyMappedCoarseFineOffsetsOffset,
+        long riskyMappedFineKeysOffset,
+        long riskyMappedSoaOffset,
         bool useRiskyBuckets,
         bool useRiskyFineBuckets,
         bool useRiskyCompact,
         bool useRiskySimd,
+        bool useRiskySoa,
+        bool useIvfOrder,
         bool useMappedSimd)
     {
         _mappedFile = mappedFile;
@@ -80,6 +124,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _vectorsOffset = vectorsOffset;
         _labelsOffset = labelsOffset;
         _bucketOffsetsOffset = bucketOffsetsOffset;
+        _profileCountsOffset = profileCountsOffset;
+        _profileLabelMasksOffset = profileLabelMasksOffset;
         _profileCounts = profileCounts;
         _profileLabelMasks = profileLabelMasks;
         _riskyFallbackIds = riskyFallbackIds;
@@ -89,10 +135,23 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _riskyFineBucketOffsets = riskyFineBucketOffsets;
         _riskyCoarseFineOffsets = riskyCoarseFineOffsets;
         _riskyFineKeys = riskyFineKeys;
+        _neighborOrdersOffset = neighborOrdersOffset;
+        _ivfOrdersOffset = ivfOrdersOffset;
+        _riskyMappedCount = riskyMappedCount;
+        _riskyMappedFineKeyCount = riskyMappedFineKeyCount;
+        _riskyMappedVectorsOffset = riskyMappedVectorsOffset;
+        _riskyMappedLabelsOffset = riskyMappedLabelsOffset;
+        _riskyMappedBucketOffsetsOffset = riskyMappedBucketOffsetsOffset;
+        _riskyMappedFineBucketOffsetsOffset = riskyMappedFineBucketOffsetsOffset;
+        _riskyMappedCoarseFineOffsetsOffset = riskyMappedCoarseFineOffsetsOffset;
+        _riskyMappedFineKeysOffset = riskyMappedFineKeysOffset;
+        _riskyMappedSoaOffset = riskyMappedSoaOffset;
         _useRiskyBuckets = useRiskyBuckets;
         _useRiskyFineBuckets = useRiskyFineBuckets;
         _useRiskyCompact = useRiskyCompact;
         _useRiskySimd = useRiskySimd;
+        _useRiskySoa = useRiskySoa;
+        _useIvfOrder = useIvfOrder;
         _useMappedSimd = useMappedSimd;
     }
 
@@ -132,8 +191,9 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var bucketOffsetsOffset = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[48..]));
             var bucketItemsOffset = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[56..]));
             var fileLength = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[64..]));
+            var extensionDirectoryOffset = checked((long)BinaryPrimitives.ReadUInt64LittleEndian(header[72..]));
 
-            if (version != 1 ||
+            if ((version != 1 && version != 2) ||
                 dim != Constants.Dim ||
                 scale != Constants.Scale ||
                 bucketCount != Constants.BucketCount)
@@ -155,27 +215,103 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 throw new InvalidOperationException("index offsets out of bounds");
             }
 
-            BuildProfileStats(ptr, count, vectorsOffset, labelsOffset, out var profileCounts, out var profileLabelMasks);
             var riskyFallbackFilter = RiskyFallbackFilter.FromEnvironment();
             var useRiskyCompact = EnvBool("RISKY_COMPACT", true);
-            BuildRiskyFallbackIndex(
-                ptr,
-                count,
-                vectorsOffset,
-                labelsOffset,
-                in riskyFallbackFilter,
-                useRiskyCompact,
-                out var riskyFallbackIds,
-                out var riskyFallbackVectors,
-                out var riskyFallbackLabels,
-                out var riskyBucketOffsets,
-                out var riskyFineBucketOffsets,
-                out var riskyCoarseFineOffsets,
-                out var riskyFineKeys);
             var useRiskyBuckets = EnvBool("RISKY_BUCKETS", true);
             var useRiskyFineBuckets = EnvBool("RISKY_FINE_BUCKETS", true);
             var useRiskySimd = EnvBool("RISKY_SIMD", true);
+            var useRiskySoa = EnvBool("RISKY_SOA", false);
+            var useIvfOrder = EnvBool("IVF_ORDER", false);
             var useMappedSimd = EnvBool("MAPPED_SIMD", true);
+            var sections = version >= 2 && extensionDirectoryOffset != 0
+                ? ReadExtensionSections(ptr, fileLength, extensionDirectoryOffset)
+                : default;
+
+            ushort[] profileCounts;
+            byte[] profileLabelMasks;
+            var profileCountsOffset = ValidSection(sections.ProfileCountsOffset, sections.ProfileCountsLength, ProfileKeyCount * 2L) ? sections.ProfileCountsOffset : 0;
+            var profileLabelMasksOffset = ValidSection(sections.ProfileMasksOffset, sections.ProfileMasksLength, ProfileKeyCount) ? sections.ProfileMasksOffset : 0;
+            if (profileCountsOffset != 0 && profileLabelMasksOffset != 0)
+            {
+                profileCounts = Array.Empty<ushort>();
+                profileLabelMasks = Array.Empty<byte>();
+            }
+            else
+            {
+                profileCountsOffset = 0;
+                profileLabelMasksOffset = 0;
+                BuildProfileStats(ptr, count, vectorsOffset, labelsOffset, out profileCounts, out profileLabelMasks);
+            }
+
+            uint[] riskyFallbackIds;
+            short[] riskyFallbackVectors;
+            byte[] riskyFallbackLabels;
+            int[] riskyBucketOffsets;
+            int[] riskyFineBucketOffsets;
+            int[] riskyCoarseFineOffsets;
+            int[] riskyFineKeys;
+            var riskyMappedCount = 0;
+            var riskyMappedFineKeyCount = 0;
+            var riskyMappedVectorsOffset = 0L;
+            var riskyMappedLabelsOffset = 0L;
+            var riskyMappedBucketOffsetsOffset = 0L;
+            var riskyMappedFineBucketOffsetsOffset = 0L;
+            var riskyMappedCoarseFineOffsetsOffset = 0L;
+            var riskyMappedFineKeysOffset = 0L;
+            var riskyMappedSoaOffset = 0L;
+            if (useRiskyCompact &&
+                TryReadRiskyMappedSections(
+                    ptr,
+                    sections,
+                    in riskyFallbackFilter,
+                    out riskyMappedCount,
+                    out riskyMappedFineKeyCount,
+                    out riskyMappedVectorsOffset,
+                    out riskyMappedLabelsOffset,
+                    out riskyMappedBucketOffsetsOffset,
+                    out riskyMappedFineBucketOffsetsOffset,
+                    out riskyMappedCoarseFineOffsetsOffset,
+                    out riskyMappedFineKeysOffset,
+                    out riskyMappedSoaOffset))
+            {
+                riskyFallbackIds = Array.Empty<uint>();
+                riskyFallbackVectors = Array.Empty<short>();
+                riskyFallbackLabels = Array.Empty<byte>();
+                riskyBucketOffsets = Array.Empty<int>();
+                riskyFineBucketOffsets = Array.Empty<int>();
+                riskyCoarseFineOffsets = Array.Empty<int>();
+                riskyFineKeys = Array.Empty<int>();
+            }
+            else
+            {
+                BuildRiskyFallbackIndex(
+                    ptr,
+                    count,
+                    vectorsOffset,
+                    labelsOffset,
+                    in riskyFallbackFilter,
+                    useRiskyCompact,
+                    out riskyFallbackIds,
+                    out riskyFallbackVectors,
+                    out riskyFallbackLabels,
+                    out riskyBucketOffsets,
+                    out riskyFineBucketOffsets,
+                    out riskyCoarseFineOffsets,
+                    out riskyFineKeys);
+            }
+
+            var neighborOrdersOffset = ValidSection(
+                sections.NeighborOrdersOffset,
+                sections.NeighborOrdersLength,
+                Constants.BucketCount * Constants.BucketCount * 2L)
+                ? sections.NeighborOrdersOffset
+                : 0;
+            var ivfOrdersOffset = ValidSection(
+                sections.IvfOrdersOffset,
+                sections.IvfOrdersLength,
+                Constants.BucketCount * Constants.BucketCount * 2L)
+                ? sections.IvfOrdersOffset
+                : 0;
 
             return new BinaryIndex(
                 mappedFile,
@@ -186,6 +322,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 vectorsOffset,
                 labelsOffset,
                 bucketOffsetsOffset,
+                profileCountsOffset,
+                profileLabelMasksOffset,
                 profileCounts,
                 profileLabelMasks,
                 riskyFallbackIds,
@@ -195,10 +333,23 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 riskyFineBucketOffsets,
                 riskyCoarseFineOffsets,
                 riskyFineKeys,
+                neighborOrdersOffset,
+                ivfOrdersOffset,
+                riskyMappedCount,
+                riskyMappedFineKeyCount,
+                riskyMappedVectorsOffset,
+                riskyMappedLabelsOffset,
+                riskyMappedBucketOffsetsOffset,
+                riskyMappedFineBucketOffsetsOffset,
+                riskyMappedCoarseFineOffsetsOffset,
+                riskyMappedFineKeysOffset,
+                riskyMappedSoaOffset,
                 useRiskyBuckets,
                 useRiskyFineBuckets,
                 useRiskyCompact,
                 useRiskySimd,
+                useRiskySoa,
+                useIvfOrder,
                 useMappedSimd);
         }
         catch
@@ -213,12 +364,60 @@ internal unsafe sealed class BinaryIndex : IDisposable
     public int Prefault()
     {
         var checksum = 0;
-        for (long pos = 0; pos < _length; pos += 4096)
+        checksum ^= PrefaultRange(_vectorsOffset, _count * Constants.Dim * 2L);
+        checksum ^= PrefaultRange(_labelsOffset, _count);
+        checksum ^= PrefaultRange(_bucketOffsetsOffset, (Constants.BucketCount + 1L) * 4L);
+        if (_profileCountsOffset != 0)
+        {
+            checksum ^= PrefaultRange(_profileCountsOffset, ProfileKeyCount * 2L);
+        }
+
+        if (_profileLabelMasksOffset != 0)
+        {
+            checksum ^= PrefaultRange(_profileLabelMasksOffset, ProfileKeyCount);
+        }
+
+        if (_useIvfOrder && _ivfOrdersOffset != 0)
+        {
+            checksum ^= PrefaultRange(_ivfOrdersOffset, Constants.BucketCount * Constants.BucketCount * 2L);
+        }
+        else if (_neighborOrdersOffset != 0)
+        {
+            checksum ^= PrefaultRange(_neighborOrdersOffset, Constants.BucketCount * Constants.BucketCount * 2L);
+        }
+
+        if (HasMappedRisky)
+        {
+            checksum ^= PrefaultRange(_riskyMappedVectorsOffset, _riskyMappedCount * RiskyVectorStride * 2L);
+            checksum ^= PrefaultRange(_riskyMappedLabelsOffset, _riskyMappedCount);
+            checksum ^= PrefaultRange(_riskyMappedBucketOffsetsOffset, (Constants.BucketCount + 1L) * 4L);
+            checksum ^= PrefaultRange(_riskyMappedFineBucketOffsetsOffset, (RiskyFineBucketCount + 1L) * 4L);
+            checksum ^= PrefaultRange(_riskyMappedCoarseFineOffsetsOffset, (Constants.BucketCount + 1L) * 4L);
+            checksum ^= PrefaultRange(_riskyMappedFineKeysOffset, _riskyMappedFineKeyCount * 4L);
+            if (_useRiskySoa && _riskyMappedSoaOffset != 0)
+            {
+                checksum ^= PrefaultRange(_riskyMappedSoaOffset, _riskyMappedCount * Constants.Dim * 2L);
+            }
+        }
+
+        return checksum;
+    }
+
+    private int PrefaultRange(long offset, long length)
+    {
+        if (offset <= 0 || length <= 0)
+        {
+            return 0;
+        }
+
+        var checksum = 0;
+        var end = offset + length;
+        for (var pos = offset; pos < end; pos += 4096)
         {
             checksum ^= VolatileRead(_ptr + pos);
         }
 
-        checksum ^= VolatileRead(_ptr + _length - 1);
+        checksum ^= VolatileRead(_ptr + end - 1);
         return checksum;
     }
 
@@ -240,7 +439,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         topDist.Fill(long.MaxValue);
 
         var candidates = 0;
-        var neighborKeys = Vectorizer.NeighborKeyOrderFor(query);
+        var neighborKeys = NeighborKeyOrderFor(query);
         for (var neighborIndex = 0; neighborIndex < neighborKeys.Length; neighborIndex++)
         {
             var key = neighborKeys[neighborIndex];
@@ -325,7 +524,7 @@ CandidateSearchDone:
         topDist.Fill(long.MaxValue);
 
         var candidates = 0;
-        var neighborKeys = Vectorizer.NeighborKeyOrderFor(query);
+        var neighborKeys = NeighborKeyOrderFor(query);
         for (var neighborIndex = 0; neighborIndex < neighborKeys.Length; neighborIndex++)
         {
             var key = neighborKeys[neighborIndex];
@@ -561,12 +760,12 @@ CandidateSearchDone:
                 out fallbackCandidates);
         }
 
-        var neighborKeys = Vectorizer.NeighborKeyOrderFor(query);
+        var neighborKeys = NeighborKeyOrderFor(query);
         for (var neighborIndex = 0; neighborIndex < neighborKeys.Length; neighborIndex++)
         {
             var key = neighborKeys[neighborIndex];
-            var start = _riskyBucketOffsets[key];
-            var end = _riskyBucketOffsets[key + 1];
+            var start = RiskyBucketOffset(key);
+            var end = RiskyBucketOffset(key + 1);
             if (start == end)
             {
                 continue;
@@ -645,12 +844,12 @@ CandidateSearchDone:
                 BinaryDistanceSquared(query[11], (extra >> 2) & 1);
         }
 
-        var neighborKeys = Vectorizer.NeighborKeyOrderFor(query);
+        var neighborKeys = NeighborKeyOrderFor(query);
         for (var neighborIndex = 0; neighborIndex < neighborKeys.Length; neighborIndex++)
         {
             var coarseKey = neighborKeys[neighborIndex];
-            var fineStart = _riskyCoarseFineOffsets[coarseKey];
-            var fineEnd = _riskyCoarseFineOffsets[coarseKey + 1];
+            var fineStart = RiskyCoarseFineOffset(coarseKey);
+            var fineEnd = RiskyCoarseFineOffset(coarseKey + 1);
             if (fineStart == fineEnd)
             {
                 continue;
@@ -670,7 +869,7 @@ CandidateSearchDone:
             var orderedFineCount = 0;
             for (var finePos = fineStart; finePos < fineEnd; finePos++)
             {
-                var fineKey = _riskyFineKeys[finePos];
+                var fineKey = RiskyFineKey(finePos);
                 var lowerBound = coarseLowerBound + fineExtraBounds[fineKey & (RiskyFineBucketsPerCoarse - 1)];
                 if (lowerBound >= topDist[Constants.K - 1])
                 {
@@ -698,8 +897,8 @@ CandidateSearchDone:
                 }
 
                 var fineKey = orderedFineKeys[orderedPos];
-                var start = _riskyFineBucketOffsets[fineKey];
-                var end = _riskyFineBucketOffsets[fineKey + 1];
+                var start = RiskyFineBucketOffset(fineKey);
+                var end = RiskyFineBucketOffset(fineKey + 1);
                 fallbackCandidates += end - start;
                 if (_useRiskyCompact)
                 {
@@ -730,6 +929,12 @@ CandidateSearchDone:
     [SkipLocalsInit]
     private void ConsiderRiskyCompactRange(ReadOnlySpan<short> query, int start, int end, Span<long> topDist, Span<byte> topLabel)
     {
+        if (_useRiskySoa && HasMappedRisky && _riskyMappedSoaOffset != 0 && Avx2.IsSupported && end - start >= 32)
+        {
+            ConsiderRiskySoaRangeAvx2(query, start, end, topDist, topLabel);
+            return;
+        }
+
         if (_useRiskySimd && Avx2.IsSupported)
         {
             ConsiderRiskyCompactRangeAvx2(query, start, end, topDist, topLabel);
@@ -753,18 +958,38 @@ CandidateSearchDone:
         query.CopyTo(paddedQuery);
 
         fixed (short* queryPtr = paddedQuery)
-        fixed (short* vectorBase = _riskyFallbackVectors)
-        fixed (byte* labelBase = _riskyFallbackLabels)
         {
-            for (var pos = start; pos < end; pos++)
+            if (HasMappedRisky)
             {
-                var dist = DistanceSquaredRiskyAvx2(vectorBase + pos * RiskyVectorStride, queryPtr);
-                if (dist >= topDist[4])
+                var vectorBase = (short*)(_ptr + _riskyMappedVectorsOffset);
+                var labelBase = _ptr + _riskyMappedLabelsOffset;
+                for (var pos = start; pos < end; pos++)
                 {
-                    continue;
+                    var dist = DistanceSquaredRiskyAvx2(vectorBase + pos * RiskyVectorStride, queryPtr);
+                    if (dist >= topDist[4])
+                    {
+                        continue;
+                    }
+
+                    InsertRiskyCandidate(dist, labelBase[pos], topDist, topLabel);
                 }
 
-                InsertRiskyCandidate(dist, labelBase[pos], topDist, topLabel);
+                return;
+            }
+
+            fixed (short* vectorBase = _riskyFallbackVectors)
+            fixed (byte* labelBase = _riskyFallbackLabels)
+            {
+                for (var pos = start; pos < end; pos++)
+                {
+                    var dist = DistanceSquaredRiskyAvx2(vectorBase + pos * RiskyVectorStride, queryPtr);
+                    if (dist >= topDist[4])
+                    {
+                        continue;
+                    }
+
+                    InsertRiskyCandidate(dist, labelBase[pos], topDist, topLabel);
+                }
             }
         }
     }
@@ -777,12 +1002,51 @@ CandidateSearchDone:
         query.CopyTo(paddedQuery);
 
         fixed (short* queryPtr = paddedQuery)
-        fixed (short* vectorBase = _riskyFallbackVectors)
-        fixed (byte* labelBase = _riskyFallbackLabels)
         {
+            if (HasMappedRisky)
+            {
+                var vectorBase = (short*)(_ptr + _riskyMappedVectorsOffset);
+                var labelBase = _ptr + _riskyMappedLabelsOffset;
+                for (var pos = start; pos < end; pos++)
+                {
+                    var dist = DistanceSquaredRiskySse2(vectorBase + pos * RiskyVectorStride, queryPtr);
+                    if (dist >= topDist[4])
+                    {
+                        continue;
+                    }
+
+                    InsertRiskyCandidate(dist, labelBase[pos], topDist, topLabel);
+                }
+
+                return;
+            }
+
+            fixed (short* vectorBase = _riskyFallbackVectors)
+            fixed (byte* labelBase = _riskyFallbackLabels)
+            {
+                for (var pos = start; pos < end; pos++)
+                {
+                    var dist = DistanceSquaredRiskySse2(vectorBase + pos * RiskyVectorStride, queryPtr);
+                    if (dist >= topDist[4])
+                    {
+                        continue;
+                    }
+
+                    InsertRiskyCandidate(dist, labelBase[pos], topDist, topLabel);
+                }
+            }
+        }
+    }
+
+    private void ConsiderRiskyCompactRangeScalar(ReadOnlySpan<short> query, int start, int end, Span<long> topDist, Span<byte> topLabel)
+    {
+        if (HasMappedRisky)
+        {
+            var vectorBase = (short*)(_ptr + _riskyMappedVectorsOffset);
+            var labelBase = _ptr + _riskyMappedLabelsOffset;
             for (var pos = start; pos < end; pos++)
             {
-                var dist = DistanceSquaredRiskySse2(vectorBase + pos * RiskyVectorStride, queryPtr);
+                var dist = DistanceSquaredRiskyScalar(vectorBase + pos * RiskyVectorStride, query, topDist[4]);
                 if (dist >= topDist[4])
                 {
                     continue;
@@ -790,11 +1054,10 @@ CandidateSearchDone:
 
                 InsertRiskyCandidate(dist, labelBase[pos], topDist, topLabel);
             }
-        }
-    }
 
-    private void ConsiderRiskyCompactRangeScalar(ReadOnlySpan<short> query, int start, int end, Span<long> topDist, Span<byte> topLabel)
-    {
+            return;
+        }
+
         fixed (short* vectorBase = _riskyFallbackVectors)
         fixed (byte* labelBase = _riskyFallbackLabels)
         {
@@ -808,6 +1071,61 @@ CandidateSearchDone:
 
                 InsertRiskyCandidate(dist, labelBase[pos], topDist, topLabel);
             }
+        }
+    }
+
+    [SkipLocalsInit]
+    private void ConsiderRiskySoaRangeAvx2(ReadOnlySpan<short> query, int start, int end, Span<long> topDist, Span<byte> topLabel)
+    {
+        var soaBase = (short*)(_ptr + _riskyMappedSoaOffset);
+        var vectorBase = (short*)(_ptr + _riskyMappedVectorsOffset);
+        var labelBase = _ptr + _riskyMappedLabelsOffset;
+        var pos = start;
+
+        fixed (short* queryPtr = query)
+        {
+            for (; pos + 8 <= end; pos += 8)
+            {
+                var acc0 = Vector256<long>.Zero;
+                var acc1 = Vector256<long>.Zero;
+                for (var dim = 0; dim < Constants.Dim; dim++)
+                {
+                    var refs16 = Sse2.LoadVector128(soaBase + dim * _riskyMappedCount + pos);
+                    var refs32 = Avx2.ConvertToVector256Int32(refs16);
+                    var diff = Avx2.Subtract(refs32, Vector256.Create((int)queryPtr[dim]));
+                    var squares = Avx2.MultiplyLow(diff, diff);
+                    acc0 = Avx2.Add(acc0, Avx2.ConvertToVector256Int64(squares.GetLower()));
+                    acc1 = Avx2.Add(acc1, Avx2.ConvertToVector256Int64(squares.GetUpper()));
+                }
+
+                var d0 = acc0.GetElement(0);
+                if (d0 < topDist[4]) InsertRiskyCandidate(d0, labelBase[pos], topDist, topLabel);
+                var d1 = acc0.GetElement(1);
+                if (d1 < topDist[4]) InsertRiskyCandidate(d1, labelBase[pos + 1], topDist, topLabel);
+                var d2 = acc0.GetElement(2);
+                if (d2 < topDist[4]) InsertRiskyCandidate(d2, labelBase[pos + 2], topDist, topLabel);
+                var d3 = acc0.GetElement(3);
+                if (d3 < topDist[4]) InsertRiskyCandidate(d3, labelBase[pos + 3], topDist, topLabel);
+                var d4 = acc1.GetElement(0);
+                if (d4 < topDist[4]) InsertRiskyCandidate(d4, labelBase[pos + 4], topDist, topLabel);
+                var d5 = acc1.GetElement(1);
+                if (d5 < topDist[4]) InsertRiskyCandidate(d5, labelBase[pos + 5], topDist, topLabel);
+                var d6 = acc1.GetElement(2);
+                if (d6 < topDist[4]) InsertRiskyCandidate(d6, labelBase[pos + 6], topDist, topLabel);
+                var d7 = acc1.GetElement(3);
+                if (d7 < topDist[4]) InsertRiskyCandidate(d7, labelBase[pos + 7], topDist, topLabel);
+            }
+        }
+
+        for (; pos < end; pos++)
+        {
+            var dist = DistanceSquaredRiskyScalar(vectorBase + pos * RiskyVectorStride, query, topDist[4]);
+            if (dist >= topDist[4])
+            {
+                continue;
+            }
+
+            InsertRiskyCandidate(dist, labelBase[pos], topDist, topLabel);
         }
     }
 
@@ -1011,10 +1329,10 @@ CandidateSearchDone:
         }
 
         var key = ProfileKey(query);
-        var mask = _profileLabelMasks[key];
+        var mask = ProfileLabelMask(key);
         if (mask == LegitMask)
         {
-            if (_profileCounts[key] < searchParams.ProfileLegitMinCount)
+            if (ProfileCount(key) < searchParams.ProfileLegitMinCount)
             {
                 return false;
             }
@@ -1025,7 +1343,7 @@ CandidateSearchDone:
 
         if (mask == FraudMask)
         {
-            if (_profileCounts[key] < searchParams.ProfileFraudMinCount)
+            if (ProfileCount(key) < searchParams.ProfileFraudMinCount)
             {
                 return false;
             }
@@ -1334,6 +1652,250 @@ CandidateSearchDone:
         return Unsafe.ReadUnaligned<uint>(_ptr + _bucketOffsetsOffset + key * 4L);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private ushort ProfileCount(int key)
+    {
+        return _profileCountsOffset != 0
+            ? Unsafe.ReadUnaligned<ushort>(_ptr + _profileCountsOffset + key * 2L)
+            : _profileCounts[key];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private byte ProfileLabelMask(int key)
+    {
+        return _profileLabelMasksOffset != 0
+            ? *(_ptr + _profileLabelMasksOffset + key)
+            : _profileLabelMasks[key];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int RiskyBucketOffset(int key)
+    {
+        return HasMappedRisky
+            ? Unsafe.ReadUnaligned<int>(_ptr + _riskyMappedBucketOffsetsOffset + key * 4L)
+            : _riskyBucketOffsets[key];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int RiskyFineBucketOffset(int key)
+    {
+        return HasMappedRisky
+            ? Unsafe.ReadUnaligned<int>(_ptr + _riskyMappedFineBucketOffsetsOffset + key * 4L)
+            : _riskyFineBucketOffsets[key];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int RiskyCoarseFineOffset(int key)
+    {
+        return HasMappedRisky
+            ? Unsafe.ReadUnaligned<int>(_ptr + _riskyMappedCoarseFineOffsetsOffset + key * 4L)
+            : _riskyCoarseFineOffsets[key];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int RiskyFineKey(int pos)
+    {
+        return HasMappedRisky
+            ? Unsafe.ReadUnaligned<int>(_ptr + _riskyMappedFineKeysOffset + pos * 4L)
+            : _riskyFineKeys[pos];
+    }
+
+    private ReadOnlySpan<ushort> NeighborKeyOrderFor(ReadOnlySpan<short> query)
+    {
+        var key = Vectorizer.BucketKey(query);
+        if (_useIvfOrder && _ivfOrdersOffset != 0)
+        {
+            return new ReadOnlySpan<ushort>(_ptr + _ivfOrdersOffset + key * Constants.BucketCount * 2L, Constants.BucketCount);
+        }
+
+        if (_neighborOrdersOffset != 0)
+        {
+            return new ReadOnlySpan<ushort>(_ptr + _neighborOrdersOffset + key * Constants.BucketCount * 2L, Constants.BucketCount);
+        }
+
+        return Vectorizer.NeighborKeyOrderForBucketKey(key);
+    }
+
+    private static bool ValidSection(long offset, long length, long expectedLength)
+    {
+        return offset > 0 && length == expectedLength;
+    }
+
+    private static SectionDirectory ReadExtensionSections(byte* ptr, long fileLength, long directoryOffset)
+    {
+        if (directoryOffset < HeaderLength || directoryOffset + 16 > fileLength)
+        {
+            throw new InvalidOperationException("bad index extension directory offset");
+        }
+
+        var header = new ReadOnlySpan<byte>(ptr + directoryOffset, 16);
+        if (!header[..8].SequenceEqual(ExtensionMagic))
+        {
+            throw new InvalidOperationException("bad index extension directory magic");
+        }
+
+        var sectionCount = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(header[8..]));
+        if ((uint)sectionCount > 64)
+        {
+            throw new InvalidOperationException("too many index extension sections");
+        }
+
+        var entriesOffset = directoryOffset + 16;
+        if (entriesOffset + sectionCount * 24L > fileLength)
+        {
+            throw new InvalidOperationException("index extension directory out of bounds");
+        }
+
+        var sections = default(SectionDirectory);
+        for (var i = 0; i < sectionCount; i++)
+        {
+            var entry = ptr + entriesOffset + i * 24L;
+            var type = Unsafe.ReadUnaligned<uint>(entry);
+            var offset = checked((long)Unsafe.ReadUnaligned<ulong>(entry + 8));
+            var length = checked((long)Unsafe.ReadUnaligned<ulong>(entry + 16));
+            if (offset < HeaderLength || length < 0 || offset + length > fileLength)
+            {
+                throw new InvalidOperationException("index extension section out of bounds");
+            }
+
+            switch (type)
+            {
+                case SectionProfileCounts:
+                    sections.ProfileCountsOffset = offset;
+                    sections.ProfileCountsLength = length;
+                    break;
+                case SectionProfileMasks:
+                    sections.ProfileMasksOffset = offset;
+                    sections.ProfileMasksLength = length;
+                    break;
+                case SectionNeighborOrders:
+                    sections.NeighborOrdersOffset = offset;
+                    sections.NeighborOrdersLength = length;
+                    break;
+                case SectionRiskyMeta:
+                    sections.RiskyMetaOffset = offset;
+                    sections.RiskyMetaLength = length;
+                    break;
+                case SectionRiskyVectors:
+                    sections.RiskyVectorsOffset = offset;
+                    sections.RiskyVectorsLength = length;
+                    break;
+                case SectionRiskyLabels:
+                    sections.RiskyLabelsOffset = offset;
+                    sections.RiskyLabelsLength = length;
+                    break;
+                case SectionRiskyBucketOffsets:
+                    sections.RiskyBucketOffsetsOffset = offset;
+                    sections.RiskyBucketOffsetsLength = length;
+                    break;
+                case SectionRiskyFineBucketOffsets:
+                    sections.RiskyFineBucketOffsetsOffset = offset;
+                    sections.RiskyFineBucketOffsetsLength = length;
+                    break;
+                case SectionRiskyCoarseFineOffsets:
+                    sections.RiskyCoarseFineOffsetsOffset = offset;
+                    sections.RiskyCoarseFineOffsetsLength = length;
+                    break;
+                case SectionRiskyFineKeys:
+                    sections.RiskyFineKeysOffset = offset;
+                    sections.RiskyFineKeysLength = length;
+                    break;
+                case SectionRiskySoa:
+                    sections.RiskySoaOffset = offset;
+                    sections.RiskySoaLength = length;
+                    break;
+                case SectionIvfOrders:
+                    sections.IvfOrdersOffset = offset;
+                    sections.IvfOrdersLength = length;
+                    break;
+            }
+        }
+
+        return sections;
+    }
+
+    private static bool TryReadRiskyMappedSections(
+        byte* ptr,
+        in SectionDirectory sections,
+        in RiskyFallbackFilter expectedFilter,
+        out int count,
+        out int fineKeyCount,
+        out long vectorsOffset,
+        out long labelsOffset,
+        out long bucketOffsetsOffset,
+        out long fineBucketOffsetsOffset,
+        out long coarseFineOffsetsOffset,
+        out long fineKeysOffset,
+        out long soaOffset)
+    {
+        count = 0;
+        fineKeyCount = 0;
+        vectorsOffset = 0;
+        labelsOffset = 0;
+        bucketOffsetsOffset = 0;
+        fineBucketOffsetsOffset = 0;
+        coarseFineOffsetsOffset = 0;
+        fineKeysOffset = 0;
+        soaOffset = 0;
+
+        if (sections.RiskyMetaOffset == 0 || sections.RiskyMetaLength < 64)
+        {
+            return false;
+        }
+
+        var meta = new ReadOnlySpan<byte>(ptr + sections.RiskyMetaOffset, (int)sections.RiskyMetaLength);
+        if (!meta[..4].SequenceEqual("RSKY"u8) ||
+            BinaryPrimitives.ReadUInt32LittleEndian(meta[4..]) != 1)
+        {
+            return false;
+        }
+
+        count = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(meta[8..]));
+        var stride = BinaryPrimitives.ReadUInt32LittleEndian(meta[12..]);
+        fineKeyCount = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(meta[16..]));
+        if (count <= 0 || stride != RiskyVectorStride || fineKeyCount < 0)
+        {
+            return false;
+        }
+
+        var filter = new RiskyFallbackFilter(
+            BinaryPrimitives.ReadInt32LittleEndian(meta[20..]),
+            BinaryPrimitives.ReadInt32LittleEndian(meta[24..]),
+            BinaryPrimitives.ReadInt32LittleEndian(meta[28..]),
+            BinaryPrimitives.ReadInt32LittleEndian(meta[32..]),
+            BinaryPrimitives.ReadInt32LittleEndian(meta[36..]),
+            BinaryPrimitives.ReadInt32LittleEndian(meta[40..]),
+            BinaryPrimitives.ReadInt32LittleEndian(meta[44..]),
+            BinaryPrimitives.ReadInt32LittleEndian(meta[48..]),
+            BinaryPrimitives.ReadInt32LittleEndian(meta[52..]),
+            BinaryPrimitives.ReadInt32LittleEndian(meta[56..]),
+            BinaryPrimitives.ReadInt32LittleEndian(meta[60..]));
+        if (!filter.Equals(expectedFilter))
+        {
+            return false;
+        }
+
+        if (!ValidSection(sections.RiskyVectorsOffset, sections.RiskyVectorsLength, count * RiskyVectorStride * 2L) ||
+            !ValidSection(sections.RiskyLabelsOffset, sections.RiskyLabelsLength, count) ||
+            !ValidSection(sections.RiskyBucketOffsetsOffset, sections.RiskyBucketOffsetsLength, (Constants.BucketCount + 1L) * 4L) ||
+            !ValidSection(sections.RiskyFineBucketOffsetsOffset, sections.RiskyFineBucketOffsetsLength, (RiskyFineBucketCount + 1L) * 4L) ||
+            !ValidSection(sections.RiskyCoarseFineOffsetsOffset, sections.RiskyCoarseFineOffsetsLength, (Constants.BucketCount + 1L) * 4L) ||
+            !ValidSection(sections.RiskyFineKeysOffset, sections.RiskyFineKeysLength, fineKeyCount * 4L) ||
+            !ValidSection(sections.RiskySoaOffset, sections.RiskySoaLength, count * Constants.Dim * 2L))
+        {
+            return false;
+        }
+
+        vectorsOffset = sections.RiskyVectorsOffset;
+        labelsOffset = sections.RiskyLabelsOffset;
+        bucketOffsetsOffset = sections.RiskyBucketOffsetsOffset;
+        fineBucketOffsetsOffset = sections.RiskyFineBucketOffsetsOffset;
+        coarseFineOffsetsOffset = sections.RiskyCoarseFineOffsetsOffset;
+        fineKeysOffset = sections.RiskyFineKeysOffset;
+        soaOffset = sections.RiskySoaOffset;
+        return true;
+    }
+
     private static void BuildProfileStats(
         byte* ptr,
         int count,
@@ -1570,66 +2132,32 @@ CandidateSearchDone:
         return 0;
     }
 
-    private readonly struct RiskyFallbackFilter
+    private struct SectionDirectory
     {
-        public readonly int AmountMin;
-        public readonly int AmountMax;
-        public readonly int InstallmentsMin;
-        public readonly int InstallmentsMax;
-        public readonly int RatioMin;
-        public readonly int KmHomeMin;
-        public readonly int KmHomeMax;
-        public readonly int Tx24hMin;
-        public readonly int Tx24hMax;
-        public readonly int MerchantAverageMin;
-        public readonly int MerchantAverageMax;
-
-        private RiskyFallbackFilter(
-            int amountMin,
-            int amountMax,
-            int installmentsMin,
-            int installmentsMax,
-            int ratioMin,
-            int kmHomeMin,
-            int kmHomeMax,
-            int tx24hMin,
-            int tx24hMax,
-            int merchantAverageMin,
-            int merchantAverageMax)
-        {
-            AmountMin = amountMin;
-            AmountMax = amountMax;
-            InstallmentsMin = installmentsMin;
-            InstallmentsMax = installmentsMax;
-            RatioMin = ratioMin;
-            KmHomeMin = kmHomeMin;
-            KmHomeMax = kmHomeMax;
-            Tx24hMin = tx24hMin;
-            Tx24hMax = tx24hMax;
-            MerchantAverageMin = merchantAverageMin;
-            MerchantAverageMax = merchantAverageMax;
-        }
-
-        public static RiskyFallbackFilter FromEnvironment()
-        {
-            return new RiskyFallbackFilter(
-                EnvInt("RISKY_AMOUNT_MIN", 350),
-                EnvInt("RISKY_AMOUNT_MAX", 3200),
-                EnvInt("RISKY_INSTALLMENTS_MIN", 2000),
-                EnvInt("RISKY_INSTALLMENTS_MAX", 6500),
-                EnvInt("RISKY_RATIO_MIN", 750),
-                EnvInt("RISKY_KM_HOME_MIN", 200),
-                EnvInt("RISKY_KM_HOME_MAX", 4300),
-                EnvInt("RISKY_TX24H_MIN", 1500),
-                EnvInt("RISKY_TX24H_MAX", 6000),
-                EnvInt("RISKY_MERCHANT_AVG_MIN", 0),
-                EnvInt("RISKY_MERCHANT_AVG_MAX", 450));
-        }
-
-        private static int EnvInt(string name, int fallback)
-        {
-            return int.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
-        }
+        public long ProfileCountsOffset;
+        public long ProfileCountsLength;
+        public long ProfileMasksOffset;
+        public long ProfileMasksLength;
+        public long NeighborOrdersOffset;
+        public long NeighborOrdersLength;
+        public long RiskyMetaOffset;
+        public long RiskyMetaLength;
+        public long RiskyVectorsOffset;
+        public long RiskyVectorsLength;
+        public long RiskyLabelsOffset;
+        public long RiskyLabelsLength;
+        public long RiskyBucketOffsetsOffset;
+        public long RiskyBucketOffsetsLength;
+        public long RiskyFineBucketOffsetsOffset;
+        public long RiskyFineBucketOffsetsLength;
+        public long RiskyCoarseFineOffsetsOffset;
+        public long RiskyCoarseFineOffsetsLength;
+        public long RiskyFineKeysOffset;
+        public long RiskyFineKeysLength;
+        public long RiskySoaOffset;
+        public long RiskySoaLength;
+        public long IvfOrdersOffset;
+        public long IvfOrdersLength;
     }
 
     private static bool EnvBool(string name, bool fallback)

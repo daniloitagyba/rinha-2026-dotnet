@@ -90,6 +90,52 @@ internal static class Vectorizer
         output[13] = Quantize(Clamp01(merchantAvgAmount / 10_000.0));
     }
 
+    public static void VectorizeProfile(
+        double amount,
+        double installments,
+        double customerAvgAmount,
+        double txCount24h,
+        bool knownMerchant,
+        ReadOnlySpan<byte> mcc,
+        double merchantAvgAmount,
+        bool isOnline,
+        bool cardPresent,
+        double kmFromHome,
+        bool hasLastTransaction,
+        double lastKmFromCurrent,
+        Span<short> output)
+    {
+        if (output.Length < Constants.Dim)
+        {
+            throw new ArgumentException("output span is too small", nameof(output));
+        }
+
+        output[0] = Quantize(Clamp01(amount / 10_000.0));
+        output[1] = Quantize(Clamp01(installments / 12.0));
+        output[2] = Quantize(Clamp01(AmountVsAverage(amount, customerAvgAmount)));
+        output[3] = 0;
+        output[4] = 0;
+
+        if (hasLastTransaction)
+        {
+            output[5] = 0;
+            output[6] = Quantize(Clamp01(lastKmFromCurrent / 1000.0));
+        }
+        else
+        {
+            output[5] = -Constants.Scale;
+            output[6] = -Constants.Scale;
+        }
+
+        output[7] = Quantize(Clamp01(kmFromHome / 1000.0));
+        output[8] = Quantize(Clamp01(txCount24h / 20.0));
+        output[9] = isOnline ? (short)Constants.Scale : (short)0;
+        output[10] = cardPresent ? (short)Constants.Scale : (short)0;
+        output[11] = knownMerchant ? (short)0 : (short)Constants.Scale;
+        output[12] = Quantize(MccRisk(mcc));
+        output[13] = Quantize(Clamp01(merchantAvgAmount / 10_000.0));
+    }
+
     public static short QuantizeReference(double value)
     {
         return value <= -0.9999 ? (short)-Constants.Scale : Quantize(Clamp01(value));

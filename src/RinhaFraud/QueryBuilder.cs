@@ -144,6 +144,148 @@ internal static class QueryBuilder
         return true;
     }
 
+    public static bool TryBuildProfileQuery(ReadOnlySpan<byte> body, Span<short> output)
+    {
+        double amount = 0;
+        double installments = 0;
+        var requestedAtStart = 0;
+        var requestedAtLength = 0;
+        double customerAvg = 0;
+        double txCount24h = 0;
+        var knownMerchantsStart = 0;
+        var knownMerchantsLength = 0;
+        var merchantIdStart = 0;
+        var merchantIdLength = 0;
+        var mccStart = 0;
+        var mccLength = 0;
+        double merchantAvg = 0;
+        bool isOnline = false;
+        bool cardPresent = false;
+        double kmFromHome = 0;
+        bool hasLastTransaction = false;
+        var lastTimestampStart = 0;
+        var lastTimestampLength = 0;
+        double lastKmFromCurrent = 0;
+
+        var hasTransaction = false;
+        var hasCustomer = false;
+        var hasMerchant = false;
+        var hasTerminal = false;
+        var hasLastField = false;
+
+        var pos = 0;
+        if (!TryEnterObject(body, ref pos))
+        {
+            return false;
+        }
+
+        while (true)
+        {
+            pos = SkipWhiteSpace(body, pos);
+            if ((uint)pos >= (uint)body.Length)
+            {
+                return false;
+            }
+
+            if (body[pos] == (byte)'}')
+            {
+                break;
+            }
+
+            if (!TryReadStringBounds(body, ref pos, out var keyStart, out var keyLength) ||
+                !TryConsumeColon(body, ref pos))
+            {
+                return false;
+            }
+
+            var key = body.Slice(keyStart, keyLength);
+            if (key.SequenceEqual("transaction"u8))
+            {
+                if (!TryParseTransaction(body, ref pos, out amount, out installments, out requestedAtStart, out requestedAtLength))
+                {
+                    return false;
+                }
+
+                hasTransaction = true;
+            }
+            else if (key.SequenceEqual("customer"u8))
+            {
+                if (!TryParseCustomer(body, ref pos, out customerAvg, out txCount24h, out knownMerchantsStart, out knownMerchantsLength))
+                {
+                    return false;
+                }
+
+                hasCustomer = true;
+            }
+            else if (key.SequenceEqual("merchant"u8))
+            {
+                if (!TryParseMerchant(body, ref pos, out merchantIdStart, out merchantIdLength, out mccStart, out mccLength, out merchantAvg))
+                {
+                    return false;
+                }
+
+                hasMerchant = true;
+            }
+            else if (key.SequenceEqual("terminal"u8))
+            {
+                if (!TryParseTerminal(body, ref pos, out isOnline, out cardPresent, out kmFromHome))
+                {
+                    return false;
+                }
+
+                hasTerminal = true;
+            }
+            else if (key.SequenceEqual("last_transaction"u8))
+            {
+                if (!TryParseLastTransactionValue(body, ref pos, out hasLastTransaction, out lastTimestampStart, out lastTimestampLength, out lastKmFromCurrent))
+                {
+                    return false;
+                }
+
+                hasLastField = true;
+            }
+            else if (!SkipValue(body, ref pos))
+            {
+                return false;
+            }
+
+            if (!TrySkipDelimiter(body, ref pos))
+            {
+                return false;
+            }
+        }
+
+        _ = requestedAtStart;
+        _ = requestedAtLength;
+        _ = lastTimestampStart;
+        _ = lastTimestampLength;
+
+        if (!(hasTransaction && hasCustomer && hasMerchant && hasTerminal && hasLastField))
+        {
+            return false;
+        }
+
+        var knownMerchants = body.Slice(knownMerchantsStart, knownMerchantsLength);
+        var merchantId = body.Slice(merchantIdStart, merchantIdLength);
+        var mcc = body.Slice(mccStart, mccLength);
+
+        Vectorizer.VectorizeProfile(
+            amount,
+            installments,
+            customerAvg,
+            txCount24h,
+            ContainsQuoted(knownMerchants, merchantId),
+            mcc,
+            merchantAvg,
+            isOnline,
+            cardPresent,
+            kmFromHome,
+            hasLastTransaction,
+            lastKmFromCurrent,
+            output);
+        return true;
+    }
+
     private static bool TryParseTransaction(
         ReadOnlySpan<byte> source,
         ref int pos,

@@ -299,17 +299,6 @@ internal static class HttpServer
         {
             var bodyStart = headerEnd + 4;
             var body = request.Slice(bodyStart, contentLength);
-            if (searchParams.ProfileFastPath)
-            {
-                Span<short> profileQuery = stackalloc short[Constants.Dim];
-                if (QueryBuilder.TryBuildProfileQuery(body, profileQuery) &&
-                    index.TryProfileFastDecision(profileQuery, searchParams, out var profileFraudCount))
-                {
-                    SendDecision(socket, profileFraudCount);
-                    return;
-                }
-            }
-
             Span<short> query = stackalloc short[Constants.Dim];
             if (!QueryBuilder.TryBuildQuery(body, query))
             {
@@ -446,24 +435,6 @@ internal static class HttpServer
         {
             var bodyStart = headerEnd + 4;
             var body = request.Slice(bodyStart, contentLength);
-            if (searchParams.ProfileFastPath)
-            {
-                Span<short> profileQuery = stackalloc short[Constants.Dim];
-                if (QueryBuilder.TryBuildProfileQuery(body, profileQuery) &&
-                    index.TryProfileFastDecision(profileQuery, searchParams, out var profileFraudCount))
-                {
-                    return profileFraudCount switch
-                    {
-                        <= 0 => Approved00ResponseBytes,
-                        1 => Approved02ResponseBytes,
-                        2 => Approved04ResponseBytes,
-                        3 => Denied06ResponseBytes,
-                        4 => Denied08ResponseBytes,
-                        _ => Denied10ResponseBytes
-                    };
-                }
-            }
-
             Span<short> query = stackalloc short[Constants.Dim];
             if (!QueryBuilder.TryBuildQuery(body, query))
             {

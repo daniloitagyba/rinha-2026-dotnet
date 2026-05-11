@@ -1002,7 +1002,7 @@ CandidateSearchDone:
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryProfileFastDecision(ReadOnlySpan<short> query, in SearchParams searchParams, out int fraudCount)
+    private bool TryProfileFastDecision(ReadOnlySpan<short> query, in SearchParams searchParams, out int fraudCount)
     {
         fraudCount = 0;
         if (!searchParams.ProfileFastPath)

@@ -223,6 +223,31 @@ internal unsafe sealed class BinaryIndex : IDisposable
     }
 
     [SkipLocalsInit]
+    public int Prewarm(in SearchParams searchParams, int requestedQueries)
+    {
+        if (requestedQueries <= 0 || _count <= 0)
+        {
+            return 0;
+        }
+
+        var step = Math.Max(1, _count / requestedQueries);
+        var checksum = 0;
+        Span<short> query = stackalloc short[Constants.Dim];
+        for (var id = 0; id < _count; id += step)
+        {
+            var vector = (short*)(_ptr + _vectorsOffset + id * Constants.Dim * 2L);
+            for (var dim = 0; dim < Constants.Dim; dim++)
+            {
+                query[dim] = vector[dim];
+            }
+
+            checksum ^= ClassifyFraudCount(query, searchParams);
+        }
+
+        return checksum;
+    }
+
+    [SkipLocalsInit]
     public int ClassifyFraudCount(ReadOnlySpan<short> query, in SearchParams searchParams)
     {
         if (TryProfileFastDecision(query, searchParams, out var fastFraudCount))

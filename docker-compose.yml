@@ -28,7 +28,7 @@ services:
     environment:
       BIND_ADDR: unix:/sockets/api1.sock
       INDEX_PATH: /app/data/references.idx
-      SERVER_MODE: raw
+      SERVER_MODE: raw-async
       TP_MIN_THREADS: "64"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
@@ -69,7 +69,7 @@ services:
     environment:
       BIND_ADDR: unix:/sockets/api2.sock
       INDEX_PATH: /app/data/references.idx
-      SERVER_MODE: raw
+      SERVER_MODE: raw-async
       TP_MIN_THREADS: "64"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"

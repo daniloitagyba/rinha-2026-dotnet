@@ -37,7 +37,6 @@ param(
     [string]$ApiMemory = $env:API_MEMORY,
     [string]$LbCpu = $env:LB_CPU,
     [string]$LbMemory = $env:LB_MEMORY,
-    [string]$LbWorkers = $env:LB_WORKERS,
     [string]$SubmissionComposeFile = $env:SUBMISSION_COMPOSE_FILE,
     [switch]$KeepServices,
     [switch]$RefreshData,
@@ -152,27 +151,20 @@ $hasResourceOverrides =
     -not [string]::IsNullOrWhiteSpace($LbCpu) -or
     -not [string]::IsNullOrWhiteSpace($LbMemory)
 
-if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides -or -not [string]::IsNullOrWhiteSpace($LbWorkers)) {
+if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides) {
     $overrideFile = Join-Path ([System.IO.Path]::GetTempPath()) "$ProjectName.override.yml"
     $lines = @("services:")
-    if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory) -or -not [string]::IsNullOrWhiteSpace($LbWorkers)) {
+    if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory)) {
         $lines += "  lb:"
-        if (-not [string]::IsNullOrWhiteSpace($LbWorkers)) {
-            $lines += "    environment:"
-            $lines += "      LB_WORKERS: `"$LbWorkers`""
+        $lines += "    deploy:"
+        $lines += "      resources:"
+        $lines += "        limits:"
+        if (-not [string]::IsNullOrWhiteSpace($LbCpu)) {
+            $lines += "          cpus: `"$LbCpu`""
         }
 
-        if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory)) {
-            $lines += "    deploy:"
-            $lines += "      resources:"
-            $lines += "        limits:"
-            if (-not [string]::IsNullOrWhiteSpace($LbCpu)) {
-                $lines += "          cpus: `"$LbCpu`""
-            }
-
-            if (-not [string]::IsNullOrWhiteSpace($LbMemory)) {
-                $lines += "          memory: `"$LbMemory`""
-            }
+        if (-not [string]::IsNullOrWhiteSpace($LbMemory)) {
+            $lines += "          memory: `"$LbMemory`""
         }
     }
 

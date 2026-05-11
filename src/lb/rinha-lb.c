@@ -11,7 +11,6 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #define BUFFER_SIZE 16384
@@ -48,12 +47,6 @@ struct connection {
 
 static unsigned int next_backend = 0;
 static connection_t *closed_head = NULL;
-static volatile sig_atomic_t terminate_requested = 0;
-
-static void handle_termination(int signal_number) {
-    (void)signal_number;
-    terminate_requested = 1;
-}
 
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -374,11 +367,25 @@ static int create_listener(int port) {
     return fd;
 }
 
-static int run_proxy(int listener, int port, int worker_id, int worker_count) {
-    next_backend = (unsigned int)(worker_id % BACKEND_COUNT);
+int main(void) {
+    signal(SIGPIPE, SIG_IGN);
+
+    int port = 9999;
+    const char *port_env = getenv("LB_PORT");
+    if (port_env != NULL && *port_env != '\0') {
+        port = atoi(port_env);
+    }
+
+    int listener = create_listener(port);
+    if (listener < 0) {
+        perror("listen");
+        return 1;
+    }
+
     int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     if (epoll_fd < 0) {
         perror("epoll_create1");
+        close(listener);
         return 1;
     }
 
@@ -390,22 +397,18 @@ static int run_proxy(int listener, int port, int worker_id, int worker_count) {
     struct epoll_event listener_event;
     memset(&listener_event, 0, sizeof(listener_event));
     listener_event.events = EPOLLIN;
-#ifdef EPOLLEXCLUSIVE
-    if (worker_count > 1) {
-        listener_event.events |= EPOLLEXCLUSIVE;
-    }
-#endif
     listener_event.data.ptr = &listener_state;
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listener, &listener_event) < 0) {
         perror("epoll_ctl");
+        close(listener);
         close(epoll_fd);
         return 1;
     }
 
-    fprintf(stderr, "serving epoll tcp proxy on 0.0.0.0:%d worker=%d/%d\n", port, worker_id + 1, worker_count);
+    fprintf(stderr, "serving epoll tcp proxy on 0.0.0.0:%d\n", port);
 
     struct epoll_event events[MAX_EVENTS];
-    while (!terminate_requested) {
+    for (;;) {
         int ready = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
         if (ready < 0) {
             if (errno == EINTR) {
@@ -427,98 +430,7 @@ static int run_proxy(int listener, int port, int worker_id, int worker_count) {
         reap_closed();
     }
 
+    close(listener);
     close(epoll_fd);
     return 1;
-}
-
-static int env_int(const char *name, int fallback) {
-    const char *value = getenv(name);
-    if (value == NULL || *value == '\0') {
-        return fallback;
-    }
-
-    return atoi(value);
-}
-
-int main(void) {
-    signal(SIGPIPE, SIG_IGN);
-
-    int port = env_int("LB_PORT", 9999);
-    int worker_count = env_int("LB_WORKERS", 1);
-    if (worker_count < 1) {
-        worker_count = 1;
-    } else if (worker_count > 4) {
-        worker_count = 4;
-    }
-
-    int listener = create_listener(port);
-    if (listener < 0) {
-        perror("listen");
-        return 1;
-    }
-
-    if (worker_count == 1) {
-        int result = run_proxy(listener, port, 0, 1);
-        close(listener);
-        return result;
-    }
-
-    signal(SIGTERM, handle_termination);
-    signal(SIGINT, handle_termination);
-
-    pid_t children[4];
-    int started = 0;
-    for (int i = 0; i < worker_count; i++) {
-        pid_t pid = fork();
-        if (pid < 0) {
-            perror("fork");
-            terminate_requested = 1;
-            break;
-        }
-
-        if (pid == 0) {
-            signal(SIGTERM, handle_termination);
-            signal(SIGINT, handle_termination);
-            int result = run_proxy(listener, port, i, worker_count);
-            close(listener);
-            return result;
-        }
-
-        children[started++] = pid;
-    }
-
-    close(listener);
-
-    int total_children = started;
-    int remaining = started;
-    int exit_code = terminate_requested ? 0 : 1;
-    while (!terminate_requested && remaining > 0) {
-        int status;
-        pid_t done = waitpid(-1, &status, 0);
-        if (done < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-
-            break;
-        }
-
-        remaining--;
-        exit_code = 1;
-        terminate_requested = 1;
-    }
-
-    for (int i = 0; i < total_children; i++) {
-        kill(children[i], SIGTERM);
-    }
-
-    while (remaining > 0) {
-        if (waitpid(-1, NULL, 0) > 0) {
-            remaining--;
-        } else if (errno != EINTR) {
-            break;
-        }
-    }
-
-    return exit_code;
 }

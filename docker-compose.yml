@@ -46,7 +46,7 @@ services:
       RISKY_INSTALLMENTS_MAX: "6200"
       RISKY_RATIO_MIN: "850"
       RISKY_KM_HOME_MIN: "250"
-      RISKY_KM_HOME_MAX: "4000"
+      RISKY_KM_HOME_MAX: "4200"
       RISKY_TX24H_MAX: "5800"
       RISKY_MERCHANT_AVG_MAX: "420"
     volumes:
@@ -87,7 +87,7 @@ services:
       RISKY_INSTALLMENTS_MAX: "6200"
       RISKY_RATIO_MIN: "850"
       RISKY_KM_HOME_MIN: "250"
-      RISKY_KM_HOME_MAX: "4000"
+      RISKY_KM_HOME_MAX: "4200"
       RISKY_TX24H_MAX: "5800"
       RISKY_MERCHANT_AVG_MAX: "420"
     volumes:

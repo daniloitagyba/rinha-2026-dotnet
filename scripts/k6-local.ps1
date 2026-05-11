@@ -31,7 +31,6 @@ param(
     [string]$Workers = $env:WORKERS,
     [string]$ServerMode = $env:SERVER_MODE,
     [string]$ThreadPoolMinThreads = $env:TP_MIN_THREADS,
-    [string]$PrewarmQueries = $env:PREWARM_QUERIES,
     [string]$KeepAliveRequests = $env:KEEP_ALIVE_REQUESTS,
     [string]$KeepAliveIdleMs = $env:KEEP_ALIVE_IDLE_MS,
     [string]$ApiCpu = $env:API_CPU,
@@ -128,7 +127,6 @@ $apiOverrides = [ordered]@{
     "WORKERS" = $Workers
     "SERVER_MODE" = $ServerMode
     "TP_MIN_THREADS" = $ThreadPoolMinThreads
-    "PREWARM_QUERIES" = $PrewarmQueries
     "KEEP_ALIVE_REQUESTS" = $KeepAliveRequests
     "KEEP_ALIVE_IDLE_MS" = $KeepAliveIdleMs
 }

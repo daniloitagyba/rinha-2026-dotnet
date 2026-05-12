@@ -32,7 +32,7 @@ services:
       INDEX_PATH: /app/data/references.idx
       SERVER_MODE: raw
       TP_MIN_THREADS: "64"
-      WORKERS: "1"
+      WORKERS: "2"
       EARLY_CANDIDATES: "9800"
       MIN_CANDIDATES: "16150"
       MAX_CANDIDATES: "24200"
@@ -73,7 +73,7 @@ services:
       INDEX_PATH: /app/data/references.idx
       SERVER_MODE: raw
       TP_MIN_THREADS: "64"
-      WORKERS: "1"
+      WORKERS: "2"
       EARLY_CANDIDATES: "9800"
       MIN_CANDIDATES: "16150"
       MAX_CANDIDATES: "24200"

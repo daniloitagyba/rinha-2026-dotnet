@@ -68,6 +68,19 @@ static void set_tcp_nodelay(int fd) {
     (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value));
 }
 
+static int env_enabled(const char *name, int fallback) {
+    const char *value = getenv(name);
+    if (value == NULL || *value == '\0') {
+        return fallback;
+    }
+
+    return strcmp(value, "0") != 0 &&
+           strcmp(value, "false") != 0 &&
+           strcmp(value, "FALSE") != 0 &&
+           strcmp(value, "no") != 0 &&
+           strcmp(value, "NO") != 0;
+}
+
 static void set_small_socket_buffers(int fd) {
     int value = 16384;
     (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, sizeof(value));
@@ -518,6 +531,10 @@ static int create_listener(int port) {
 
     int value = 1;
     (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(value));
+    if (env_enabled("TCP_DEFER_ACCEPT", 1)) {
+        value = 1;
+        (void)setsockopt(fd, IPPROTO_TCP, TCP_DEFER_ACCEPT, &value, sizeof(value));
+    }
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));

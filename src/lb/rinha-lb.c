@@ -15,6 +15,7 @@
 
 #define BUFFER_SIZE 16384
 #define BACKEND_COUNT 2
+#define MAX_CONTROL_CONNECTIONS 4
 #define MAX_EVENTS 1024
 
 static const char *backend_paths[BACKEND_COUNT] = {
@@ -52,7 +53,9 @@ struct connection {
 
 static unsigned int next_backend = 0;
 static connection_t *closed_head = NULL;
-static int control_fds[BACKEND_COUNT] = {-1, -1};
+static int control_fds[BACKEND_COUNT][MAX_CONTROL_CONNECTIONS];
+static unsigned int next_control_slot[BACKEND_COUNT];
+static unsigned int control_connection_count = 1;
 
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -79,6 +82,24 @@ static int env_enabled(const char *name, int fallback) {
            strcmp(value, "FALSE") != 0 &&
            strcmp(value, "no") != 0 &&
            strcmp(value, "NO") != 0;
+}
+
+static int env_int_range(const char *name, int fallback, int min, int max) {
+    const char *value = getenv(name);
+    if (value == NULL || *value == '\0') {
+        return fallback;
+    }
+
+    int parsed = atoi(value);
+    if (parsed < min) {
+        return min;
+    }
+
+    if (parsed > max) {
+        return max;
+    }
+
+    return parsed;
 }
 
 static void set_small_socket_buffers(int fd) {
@@ -246,14 +267,30 @@ static int connect_control(unsigned int index) {
     return -1;
 }
 
-static int ensure_control(unsigned int index) {
-    if (control_fds[index] >= 0) {
-        return control_fds[index];
+static void init_control_fds(void) {
+    for (unsigned int backend = 0; backend < BACKEND_COUNT; backend++) {
+        next_control_slot[backend] = 0;
+        for (unsigned int slot = 0; slot < MAX_CONTROL_CONNECTIONS; slot++) {
+            control_fds[backend][slot] = -1;
+        }
+    }
+}
+
+static int ensure_control(unsigned int index, unsigned int slot) {
+    if (control_fds[index][slot] >= 0) {
+        return control_fds[index][slot];
     }
 
     int fd = connect_control(index);
-    control_fds[index] = fd;
+    control_fds[index][slot] = fd;
     return fd;
+}
+
+static void close_control(unsigned int index, unsigned int slot) {
+    if (control_fds[index][slot] >= 0) {
+        close(control_fds[index][slot]);
+        control_fds[index][slot] = -1;
+    }
 }
 
 static int send_fd(int control_fd, int fd_to_send) {
@@ -391,15 +428,21 @@ static void accept_clients_fdpass(int listener) {
         int delivered = 0;
         for (unsigned int attempt = 0; attempt < BACKEND_COUNT; attempt++) {
             unsigned int index = (start + attempt) % BACKEND_COUNT;
-            int control_fd = ensure_control(index);
-            if (control_fd >= 0 && send_fd(control_fd, client_fd) == 0) {
-                delivered = 1;
-                break;
+            unsigned int slot_start = next_control_slot[index];
+            for (unsigned int slot_attempt = 0; slot_attempt < control_connection_count; slot_attempt++) {
+                unsigned int slot = (slot_start + slot_attempt) % control_connection_count;
+                int control_fd = ensure_control(index, slot);
+                if (control_fd >= 0 && send_fd(control_fd, client_fd) == 0) {
+                    next_control_slot[index] = (slot + 1) % control_connection_count;
+                    delivered = 1;
+                    break;
+                }
+
+                close_control(index, slot);
             }
 
-            if (control_fds[index] >= 0) {
-                close(control_fds[index]);
-                control_fds[index] = -1;
+            if (delivered) {
+                break;
             }
         }
 
@@ -411,6 +454,9 @@ static void accept_clients_fdpass(int listener) {
 }
 
 static int run_fdpass(int listener, int port) {
+    init_control_fds();
+    control_connection_count = (unsigned int)env_int_range("FD_CONTROL_CONNECTIONS", 1, 1, MAX_CONTROL_CONNECTIONS);
+
     int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     if (epoll_fd < 0) {
         perror("epoll_create1");
@@ -434,7 +480,7 @@ static int run_fdpass(int listener, int port) {
         return 1;
     }
 
-    fprintf(stderr, "serving fdpass load balancer on 0.0.0.0:%d\n", port);
+    fprintf(stderr, "serving fdpass load balancer on 0.0.0.0:%d, control_connections=%u\n", port, control_connection_count);
 
     struct epoll_event events[MAX_EVENTS];
     for (;;) {
@@ -457,10 +503,9 @@ static int run_fdpass(int listener, int port) {
 
     close(listener);
     close(epoll_fd);
-    for (int i = 0; i < BACKEND_COUNT; i++) {
-        if (control_fds[i] >= 0) {
-            close(control_fds[i]);
-            control_fds[i] = -1;
+    for (unsigned int i = 0; i < BACKEND_COUNT; i++) {
+        for (unsigned int slot = 0; slot < control_connection_count; slot++) {
+            close_control(i, slot);
         }
     }
 

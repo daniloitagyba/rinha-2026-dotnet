@@ -6,7 +6,6 @@ services:
     entrypoint: ["rinha-lb"]
     environment:
       LB_MODE: fdpass
-      FD_CONTROL_CONNECTIONS: "2"
     ports:
       - "9999:9999"
     volumes:

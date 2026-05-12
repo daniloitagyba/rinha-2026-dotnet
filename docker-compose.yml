@@ -21,7 +21,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.18"
+          cpus: "0.19"
           memory: "32MB"
 
   api1:
@@ -63,7 +63,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.41"
+          cpus: "0.405"
           memory: "156MB"
 
   api2:
@@ -105,7 +105,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.41"
+          cpus: "0.405"
           memory: "156MB"
 
 volumes:

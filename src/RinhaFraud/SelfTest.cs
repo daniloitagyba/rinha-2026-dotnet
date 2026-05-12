@@ -72,7 +72,8 @@ internal static class SelfTest
                 profileMinCount: 20,
                 profileLegitMinCount: 20,
                 profileFraudMinCount: 20,
-                exactFallback: SearchParams.ExactFallbackOff);
+                exactFallback: SearchParams.ExactFallbackOff,
+                earlyEdgeFallback: false);
 
             Span<short> legitVector = stackalloc short[Constants.Dim];
             var legitBytes = Encoding.UTF8.GetBytes(LegitPayload);

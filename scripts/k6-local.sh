@@ -105,6 +105,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${PROFILE_LEGIT_MIN_COUNT:-}" ] || \
    [ -n "${PROFILE_FRAUD_MIN_COUNT:-}" ] || \
    [ -n "${EXACT_FALLBACK:-}" ] || \
+   [ -n "${EARLY_EDGE_FALLBACK:-}" ] || \
    [ -n "${RISKY_AMOUNT_MIN:-}" ] || \
    [ -n "${RISKY_AMOUNT_MAX:-}" ] || \
    [ -n "${RISKY_INSTALLMENTS_MIN:-}" ] || \
@@ -185,6 +186,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${PROFILE_LEGIT_MIN_COUNT:-}" ] && echo "      PROFILE_LEGIT_MIN_COUNT: \"$PROFILE_LEGIT_MIN_COUNT\""
       [ -n "${PROFILE_FRAUD_MIN_COUNT:-}" ] && echo "      PROFILE_FRAUD_MIN_COUNT: \"$PROFILE_FRAUD_MIN_COUNT\""
       [ -n "${EXACT_FALLBACK:-}" ] && echo "      EXACT_FALLBACK: \"$EXACT_FALLBACK\""
+      [ -n "${EARLY_EDGE_FALLBACK:-}" ] && echo "      EARLY_EDGE_FALLBACK: \"$EARLY_EDGE_FALLBACK\""
       [ -n "${RISKY_AMOUNT_MIN:-}" ] && echo "      RISKY_AMOUNT_MIN: \"$RISKY_AMOUNT_MIN\""
       [ -n "${RISKY_AMOUNT_MAX:-}" ] && echo "      RISKY_AMOUNT_MAX: \"$RISKY_AMOUNT_MAX\""
       [ -n "${RISKY_INSTALLMENTS_MIN:-}" ] && echo "      RISKY_INSTALLMENTS_MIN: \"$RISKY_INSTALLMENTS_MIN\""

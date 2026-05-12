@@ -481,7 +481,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 goto CandidateSearchDone;
             }
 
-            if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel))
+            if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel, searchParams.EarlyEdgeFallback))
             {
                 goto CandidateSearchDone;
             }
@@ -566,7 +566,7 @@ CandidateSearchDone:
                 goto CandidateSearchDone;
             }
 
-            if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel))
+            if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel, searchParams.EarlyEdgeFallback))
             {
                 goto CandidateSearchDone;
             }
@@ -1330,7 +1330,7 @@ CandidateSearchDone:
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool StrongDecision(ReadOnlySpan<byte> topLabel)
+    private static bool StrongDecision(ReadOnlySpan<byte> topLabel, bool includeEdges)
     {
         var frauds = 0;
         for (var i = 0; i < Constants.K; i++)
@@ -1338,7 +1338,7 @@ CandidateSearchDone:
             frauds += topLabel[i];
         }
 
-        return frauds == 0 || frauds == Constants.K;
+        return includeEdges ? frauds <= 1 || frauds >= Constants.K - 1 : frauds == 0 || frauds == Constants.K;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

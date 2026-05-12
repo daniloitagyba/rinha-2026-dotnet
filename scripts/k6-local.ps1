@@ -13,6 +13,7 @@ param(
     [string]$ProfileLegitMinCount = $env:PROFILE_LEGIT_MIN_COUNT,
     [string]$ProfileFraudMinCount = $env:PROFILE_FRAUD_MIN_COUNT,
     [string]$ExactFallback = $env:EXACT_FALLBACK,
+    [string]$EarlyEdgeFallback = $env:EARLY_EDGE_FALLBACK,
     [string]$RiskyAmountMin = $env:RISKY_AMOUNT_MIN,
     [string]$RiskyAmountMax = $env:RISKY_AMOUNT_MAX,
     [string]$RiskyInstallmentsMin = $env:RISKY_INSTALLMENTS_MIN,
@@ -123,6 +124,7 @@ $apiOverrides = [ordered]@{
     "PROFILE_LEGIT_MIN_COUNT" = $ProfileLegitMinCount
     "PROFILE_FRAUD_MIN_COUNT" = $ProfileFraudMinCount
     "EXACT_FALLBACK" = $ExactFallback
+    "EARLY_EDGE_FALLBACK" = $EarlyEdgeFallback
     "RISKY_AMOUNT_MIN" = $RiskyAmountMin
     "RISKY_AMOUNT_MAX" = $RiskyAmountMax
     "RISKY_INSTALLMENTS_MIN" = $RiskyInstallmentsMin

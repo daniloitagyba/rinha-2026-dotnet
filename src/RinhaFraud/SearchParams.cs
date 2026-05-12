@@ -18,6 +18,7 @@ internal readonly struct SearchParams
     public readonly int ProfileLegitMinCount;
     public readonly int ProfileFraudMinCount;
     public readonly int ExactFallback;
+    public readonly bool EarlyEdgeFallback;
 
     public SearchParams(
         int earlyCandidates,
@@ -28,7 +29,8 @@ internal readonly struct SearchParams
         int profileMinCount,
         int profileLegitMinCount,
         int profileFraudMinCount,
-        int exactFallback)
+        int exactFallback,
+        bool earlyEdgeFallback)
     {
         EarlyCandidates = Math.Clamp(earlyCandidates, Constants.K, minCandidates);
         MinCandidates = minCandidates;
@@ -39,6 +41,7 @@ internal readonly struct SearchParams
         ProfileLegitMinCount = Math.Max(1, profileLegitMinCount);
         ProfileFraudMinCount = Math.Max(1, profileFraudMinCount);
         ExactFallback = Math.Clamp(exactFallback, ExactFallbackOff, ExactFallbackProfileMiss);
+        EarlyEdgeFallback = earlyEdgeFallback;
     }
 
     public static SearchParams FromEnvironment()
@@ -56,7 +59,8 @@ internal readonly struct SearchParams
             profileMinCount,
             EnvInt("PROFILE_LEGIT_MIN_COUNT", profileMinCount),
             EnvInt("PROFILE_FRAUD_MIN_COUNT", profileMinCount),
-            ExactFallbackMode(Environment.GetEnvironmentVariable("EXACT_FALLBACK")));
+            ExactFallbackMode(Environment.GetEnvironmentVariable("EXACT_FALLBACK")),
+            EnvBool("EARLY_EDGE_FALLBACK", false));
     }
 
     private static int EnvInt(string name, int fallback)

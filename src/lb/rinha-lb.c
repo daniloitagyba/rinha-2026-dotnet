@@ -531,7 +531,7 @@ static int create_listener(int port) {
 
     int value = 1;
     (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(value));
-    if (env_enabled("TCP_DEFER_ACCEPT", 1)) {
+    if (env_enabled("TCP_DEFER_ACCEPT", 0)) {
         value = 1;
         (void)setsockopt(fd, IPPROTO_TCP, TCP_DEFER_ACCEPT, &value, sizeof(value));
     }

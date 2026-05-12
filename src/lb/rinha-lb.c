@@ -384,6 +384,9 @@ static void accept_clients_fdpass(int listener) {
             return;
         }
 
+        set_tcp_nodelay(client_fd);
+        set_small_socket_buffers(client_fd);
+
         unsigned int start = choose_backend();
         int delivered = 0;
         for (unsigned int attempt = 0; attempt < BACKEND_COUNT; attempt++) {

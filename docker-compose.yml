@@ -21,8 +21,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
-          memory: "32MB"
+          cpus: "0.10"
+          memory: "30M"
 
   api1:
     image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:f695c23b7cf2c66f6b82a99d5047da2b23f29df2
@@ -62,8 +62,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.425"
-          memory: "156MB"
+          cpus: "0.45"
+          memory: "160M"
 
   api2:
     image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:f695c23b7cf2c66f6b82a99d5047da2b23f29df2
@@ -103,8 +103,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.425"
-          memory: "156MB"
+          cpus: "0.45"
+          memory: "160M"
 
 volumes:
   backend-sockets:

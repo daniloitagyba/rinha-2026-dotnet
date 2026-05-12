@@ -122,23 +122,39 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${SOCKETS_MOUNT:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
    [ -n "${SERVER_MODE:-}" ] || \
+   [ -n "${INDEX_HUGEPAGES:-}" ] || \
+   [ -n "${DOTNET_PROCESSOR_COUNT:-}" ] || \
+   [ -n "${DOTNET_GCHeapCount:-}" ] || \
+   [ -n "${DOTNET_GCConserveMemory:-}" ] || \
+   [ -n "${DOTNET_EnableDiagnostics:-}" ] || \
+   [ -n "${GC_LATENCY_MODE:-}" ] || \
    [ -n "${TP_MIN_THREADS:-}" ] || \
+   [ -n "${TP_MIN_IO_THREADS:-}" ] || \
+   [ -n "${TP_MAX_THREADS:-}" ] || \
+   [ -n "${TP_MAX_IO_THREADS:-}" ] || \
    [ -n "${KEEP_ALIVE_REQUESTS:-}" ] || \
    [ -n "${KEEP_ALIVE_IDLE_MS:-}" ] || \
    [ -n "${API_CPU:-}" ] || \
    [ -n "${API_MEMORY:-}" ] || \
+   [ -n "${API_CPUSET:-}" ] || \
+   [ -n "${API1_CPUSET:-}" ] || \
+   [ -n "${API2_CPUSET:-}" ] || \
    [ -n "${LB_CPU:-}" ] || \
-   [ -n "${LB_MEMORY:-}" ]; then
+   [ -n "${LB_MEMORY:-}" ] || \
+   [ -n "${LB_CPUSET:-}" ]; then
   OVERRIDE_FILE="${OVERRIDE_FILE_PATH:-${TMPDIR:-/tmp}/${PROJECT_NAME}.override.yml}"
   {
     echo "services:"
-    if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ]; then
+    if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ] || [ -n "${LB_CPUSET:-}" ]; then
       echo "  lb:"
-      echo "    deploy:"
-      echo "      resources:"
-      echo "        limits:"
-      [ -n "${LB_CPU:-}" ] && echo "          cpus: \"$LB_CPU\""
-      [ -n "${LB_MEMORY:-}" ] && echo "          memory: \"$LB_MEMORY\""
+      [ -n "${LB_CPUSET:-}" ] && echo "    cpuset: \"$LB_CPUSET\""
+      if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ]; then
+        echo "    deploy:"
+        echo "      resources:"
+        echo "        limits:"
+        [ -n "${LB_CPU:-}" ] && echo "          cpus: \"$LB_CPU\""
+        [ -n "${LB_MEMORY:-}" ] && echo "          memory: \"$LB_MEMORY\""
+      fi
     fi
 
     if [ -n "${SOCKETS_MOUNT:-}" ]; then
@@ -150,7 +166,16 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
     fi
 
     for service in api1 api2; do
+      service_cpuset="${API_CPUSET:-}"
+      if [ "$service" = "api1" ] && [ -n "${API1_CPUSET:-}" ]; then
+        service_cpuset="$API1_CPUSET"
+      fi
+      if [ "$service" = "api2" ] && [ -n "${API2_CPUSET:-}" ]; then
+        service_cpuset="$API2_CPUSET"
+      fi
+
       echo "  $service:"
+      [ -n "$service_cpuset" ] && echo "    cpuset: \"$service_cpuset\""
       echo "    environment:"
       [ -n "${EARLY_CANDIDATES:-}" ] && echo "      EARLY_CANDIDATES: \"$EARLY_CANDIDATES\""
       [ -n "${MIN_CANDIDATES:-}" ] && echo "      MIN_CANDIDATES: \"$MIN_CANDIDATES\""
@@ -176,7 +201,16 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${RISKY_SIMD:-}" ] && echo "      RISKY_SIMD: \"$RISKY_SIMD\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
       [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""
+      [ -n "${INDEX_HUGEPAGES:-}" ] && echo "      INDEX_HUGEPAGES: \"$INDEX_HUGEPAGES\""
+      [ -n "${DOTNET_PROCESSOR_COUNT:-}" ] && echo "      DOTNET_PROCESSOR_COUNT: \"$DOTNET_PROCESSOR_COUNT\""
+      [ -n "${DOTNET_GCHeapCount:-}" ] && echo "      DOTNET_GCHeapCount: \"$DOTNET_GCHeapCount\""
+      [ -n "${DOTNET_GCConserveMemory:-}" ] && echo "      DOTNET_GCConserveMemory: \"$DOTNET_GCConserveMemory\""
+      [ -n "${DOTNET_EnableDiagnostics:-}" ] && echo "      DOTNET_EnableDiagnostics: \"$DOTNET_EnableDiagnostics\""
+      [ -n "${GC_LATENCY_MODE:-}" ] && echo "      GC_LATENCY_MODE: \"$GC_LATENCY_MODE\""
       [ -n "${TP_MIN_THREADS:-}" ] && echo "      TP_MIN_THREADS: \"$TP_MIN_THREADS\""
+      [ -n "${TP_MIN_IO_THREADS:-}" ] && echo "      TP_MIN_IO_THREADS: \"$TP_MIN_IO_THREADS\""
+      [ -n "${TP_MAX_THREADS:-}" ] && echo "      TP_MAX_THREADS: \"$TP_MAX_THREADS\""
+      [ -n "${TP_MAX_IO_THREADS:-}" ] && echo "      TP_MAX_IO_THREADS: \"$TP_MAX_IO_THREADS\""
       [ -n "${KEEP_ALIVE_REQUESTS:-}" ] && echo "      KEEP_ALIVE_REQUESTS: \"$KEEP_ALIVE_REQUESTS\""
       [ -n "${KEEP_ALIVE_IDLE_MS:-}" ] && echo "      KEEP_ALIVE_IDLE_MS: \"$KEEP_ALIVE_IDLE_MS\""
 

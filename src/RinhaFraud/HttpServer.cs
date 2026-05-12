@@ -7,6 +7,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime;
 using Microsoft.Win32.SafeHandles;
 using System.Threading;
 using System.Threading.Tasks;
@@ -38,21 +39,28 @@ internal static class HttpServer
         var indexPath = Environment.GetEnvironmentVariable("INDEX_PATH") ?? "/app/data/references.idx";
         var workerCount = Math.Max(1, EnvInt("WORKERS", 1));
         var minThreads = EnvInt("TP_MIN_THREADS", 0);
+        var minIoThreads = EnvInt("TP_MIN_IO_THREADS", minThreads);
+        var maxThreads = EnvInt("TP_MAX_THREADS", 0);
+        var maxIoThreads = EnvInt("TP_MAX_IO_THREADS", maxThreads);
         var keepAliveRequests = Math.Max(0, EnvInt("KEEP_ALIVE_REQUESTS", 0));
         var keepAliveIdleMs = Math.Max(100, EnvInt("KEEP_ALIVE_IDLE_MS", 5000));
         var searchParams = SearchParams.FromEnvironment();
+        ApplyGcLatencyMode();
 
         using var index = BinaryIndex.Open(indexPath);
+        if (EnvBool("INDEX_HUGEPAGES", false))
+        {
+            var advised = index.AdviseHugePages();
+            Console.Error.WriteLine($"index hugepage madvise bytes={advised}");
+        }
+
         if (EnvBool("PREFETCH_INDEX", true))
         {
             var checksum = index.Prefault();
             Console.Error.WriteLine($"prefetched index pages, checksum={checksum}");
         }
 
-        if (minThreads > 0)
-        {
-            ThreadPool.SetMinThreads(minThreads, minThreads);
-        }
+        ApplyThreadPoolTuning(minThreads, minIoThreads, maxThreads, maxIoThreads);
 
         var asyncMode = string.Equals(Environment.GetEnvironmentVariable("SERVER_MODE"), "raw-async", StringComparison.OrdinalIgnoreCase);
         if (bindAddress.StartsWith("fd:", StringComparison.Ordinal))
@@ -64,7 +72,7 @@ internal static class HttpServer
         using var listener = CreateListener(bindAddress);
 
         Console.Error.WriteLine(
-            $"serving on {bindAddress}, server_mode={(asyncMode ? "raw-async" : "raw")}, tp_min_threads={minThreads}, index={indexPath}, workers={workerCount}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, profile_legit_min_count={searchParams.ProfileLegitMinCount}, profile_fraud_min_count={searchParams.ProfileFraudMinCount}, exact_fallback={searchParams.ExactFallback}, risky_fallback_refs={index.RiskyFallbackCount}");
+            $"serving on {bindAddress}, server_mode={(asyncMode ? "raw-async" : "raw")}, tp_min_threads={minThreads}, tp_min_io_threads={minIoThreads}, tp_max_threads={maxThreads}, tp_max_io_threads={maxIoThreads}, index={indexPath}, workers={workerCount}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, early_candidates={searchParams.EarlyCandidates}, min_candidates={searchParams.MinCandidates}, max_candidates={searchParams.MaxCandidates}, flat={searchParams.Flat}, profile_fastpath={searchParams.ProfileFastPath}, profile_min_count={searchParams.ProfileMinCount}, profile_legit_min_count={searchParams.ProfileLegitMinCount}, profile_fraud_min_count={searchParams.ProfileFraudMinCount}, exact_fallback={searchParams.ExactFallback}, risky_fallback_refs={index.RiskyFallbackCount}");
 
         for (var i = 0; i < workerCount; i++)
         {
@@ -80,6 +88,51 @@ internal static class HttpServer
         }
 
         Thread.Sleep(Timeout.Infinite);
+    }
+
+    private static void ApplyGcLatencyMode()
+    {
+        var mode = Environment.GetEnvironmentVariable("GC_LATENCY_MODE");
+        if (string.IsNullOrWhiteSpace(mode))
+        {
+            return;
+        }
+
+        if (mode.Equals("sustained-low-latency", StringComparison.OrdinalIgnoreCase) ||
+            mode.Equals("sustainedlowlatency", StringComparison.OrdinalIgnoreCase) ||
+            mode.Equals("sustained", StringComparison.OrdinalIgnoreCase))
+        {
+            GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
+            Console.Error.WriteLine("gc latency mode=sustained-low-latency");
+        }
+    }
+
+    private static void ApplyThreadPoolTuning(int minThreads, int minIoThreads, int maxThreads, int maxIoThreads)
+    {
+        if (minThreads <= 0 && minIoThreads <= 0 && maxThreads <= 0 && maxIoThreads <= 0)
+        {
+            return;
+        }
+
+        ThreadPool.GetMinThreads(out var currentMinWorker, out var currentMinIo);
+        ThreadPool.GetMaxThreads(out var currentMaxWorker, out var currentMaxIo);
+
+        var targetMinWorker = minThreads > 0 ? minThreads : currentMinWorker;
+        var targetMinIo = minIoThreads > 0 ? minIoThreads : currentMinIo;
+        var targetMaxWorker = maxThreads > 0 ? Math.Max(maxThreads, targetMinWorker) : currentMaxWorker;
+        var targetMaxIo = maxIoThreads > 0 ? Math.Max(maxIoThreads, targetMinIo) : currentMaxIo;
+
+        if (maxThreads > 0 || maxIoThreads > 0)
+        {
+            ThreadPool.SetMaxThreads(targetMaxWorker, targetMaxIo);
+        }
+
+        if (minThreads > 0 || minIoThreads > 0)
+        {
+            ThreadPool.SetMinThreads(targetMinWorker, targetMinIo);
+        }
+
+        Console.Error.WriteLine($"threadpool min={targetMinWorker}/{targetMinIo}, max={targetMaxWorker}/{targetMaxIo}");
     }
 
     private static async Task AcceptLoopAsync(Socket listener, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs)

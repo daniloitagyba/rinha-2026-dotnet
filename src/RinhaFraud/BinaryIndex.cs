@@ -15,6 +15,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
 {
     private static ReadOnlySpan<byte> Magic => "RINHA26I"u8;
     private static ReadOnlySpan<byte> ExtensionMagic => "R26XDIR1"u8;
+    private const int MadvHugePage = 14;
     private const int HeaderLength = 80;
     private const int ProfileKeyCount = 1 << 22;
     private const int RiskyVectorStride = 16;
@@ -401,6 +402,27 @@ internal unsafe sealed class BinaryIndex : IDisposable
         }
 
         return checksum;
+    }
+
+    public long AdviseHugePages()
+    {
+        if (!OperatingSystem.IsLinux() || _ptr == null || _length <= 0)
+        {
+            return 0;
+        }
+
+        try
+        {
+            return madvise((nint)_ptr, (nuint)_length, MadvHugePage) == 0 ? _length : 0;
+        }
+        catch (DllNotFoundException)
+        {
+            return 0;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return 0;
+        }
     }
 
     private int PrefaultRange(long offset, long length)
@@ -2165,6 +2187,9 @@ CandidateSearchDone:
         var value = Environment.GetEnvironmentVariable(name);
         return value is null ? fallback : value is "1" or "true" or "TRUE" or "yes" or "YES";
     }
+
+    [DllImport("libc", EntryPoint = "madvise", SetLastError = true)]
+    private static extern int madvise(nint address, nuint length, int advice);
 
     private static bool NeedsFullRiskyTiebreak(ReadOnlySpan<short> query, int frauds)
     {

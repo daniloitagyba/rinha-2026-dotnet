@@ -30,13 +30,26 @@ param(
     [string]$SocketsMount = $env:SOCKETS_MOUNT,
     [string]$Workers = $env:WORKERS,
     [string]$ServerMode = $env:SERVER_MODE,
+    [string]$IndexHugePages = $env:INDEX_HUGEPAGES,
+    [string]$DotnetProcessorCount = $env:DOTNET_PROCESSOR_COUNT,
+    [string]$DotnetGCHeapCount = $env:DOTNET_GCHeapCount,
+    [string]$DotnetGCConserveMemory = $env:DOTNET_GCConserveMemory,
+    [string]$DotnetEnableDiagnostics = $env:DOTNET_EnableDiagnostics,
+    [string]$GcLatencyMode = $env:GC_LATENCY_MODE,
     [string]$ThreadPoolMinThreads = $env:TP_MIN_THREADS,
+    [string]$ThreadPoolMinIoThreads = $env:TP_MIN_IO_THREADS,
+    [string]$ThreadPoolMaxThreads = $env:TP_MAX_THREADS,
+    [string]$ThreadPoolMaxIoThreads = $env:TP_MAX_IO_THREADS,
     [string]$KeepAliveRequests = $env:KEEP_ALIVE_REQUESTS,
     [string]$KeepAliveIdleMs = $env:KEEP_ALIVE_IDLE_MS,
     [string]$ApiCpu = $env:API_CPU,
     [string]$ApiMemory = $env:API_MEMORY,
+    [string]$ApiCpuset = $env:API_CPUSET,
+    [string]$Api1Cpuset = $env:API1_CPUSET,
+    [string]$Api2Cpuset = $env:API2_CPUSET,
     [string]$LbCpu = $env:LB_CPU,
     [string]$LbMemory = $env:LB_MEMORY,
+    [string]$LbCpuset = $env:LB_CPUSET,
     [string]$SubmissionComposeFile = $env:SUBMISSION_COMPOSE_FILE,
     [switch]$KeepServices,
     [switch]$RefreshData,
@@ -126,7 +139,16 @@ $apiOverrides = [ordered]@{
     "RISKY_SIMD" = $RiskySimd
     "WORKERS" = $Workers
     "SERVER_MODE" = $ServerMode
+    "INDEX_HUGEPAGES" = $IndexHugePages
+    "DOTNET_PROCESSOR_COUNT" = $DotnetProcessorCount
+    "DOTNET_GCHeapCount" = $DotnetGCHeapCount
+    "DOTNET_GCConserveMemory" = $DotnetGCConserveMemory
+    "DOTNET_EnableDiagnostics" = $DotnetEnableDiagnostics
+    "GC_LATENCY_MODE" = $GcLatencyMode
     "TP_MIN_THREADS" = $ThreadPoolMinThreads
+    "TP_MIN_IO_THREADS" = $ThreadPoolMinIoThreads
+    "TP_MAX_THREADS" = $ThreadPoolMaxThreads
+    "TP_MAX_IO_THREADS" = $ThreadPoolMaxIoThreads
     "KEEP_ALIVE_REQUESTS" = $KeepAliveRequests
     "KEEP_ALIVE_IDLE_MS" = $KeepAliveIdleMs
 }
@@ -151,20 +173,32 @@ $hasResourceOverrides =
     -not [string]::IsNullOrWhiteSpace($LbCpu) -or
     -not [string]::IsNullOrWhiteSpace($LbMemory)
 
-if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides) {
+$hasCpusetOverrides =
+    -not [string]::IsNullOrWhiteSpace($ApiCpuset) -or
+    -not [string]::IsNullOrWhiteSpace($Api1Cpuset) -or
+    -not [string]::IsNullOrWhiteSpace($Api2Cpuset) -or
+    -not [string]::IsNullOrWhiteSpace($LbCpuset)
+
+if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides -or $hasCpusetOverrides) {
     $overrideFile = Join-Path ([System.IO.Path]::GetTempPath()) "$ProjectName.override.yml"
     $lines = @("services:")
-    if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory)) {
+    if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory) -or -not [string]::IsNullOrWhiteSpace($LbCpuset)) {
         $lines += "  lb:"
-        $lines += "    deploy:"
-        $lines += "      resources:"
-        $lines += "        limits:"
-        if (-not [string]::IsNullOrWhiteSpace($LbCpu)) {
-            $lines += "          cpus: `"$LbCpu`""
+        if (-not [string]::IsNullOrWhiteSpace($LbCpuset)) {
+            $lines += "    cpuset: `"$LbCpuset`""
         }
 
-        if (-not [string]::IsNullOrWhiteSpace($LbMemory)) {
-            $lines += "          memory: `"$LbMemory`""
+        if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory)) {
+            $lines += "    deploy:"
+            $lines += "      resources:"
+            $lines += "        limits:"
+            if (-not [string]::IsNullOrWhiteSpace($LbCpu)) {
+                $lines += "          cpus: `"$LbCpu`""
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($LbMemory)) {
+                $lines += "          memory: `"$LbMemory`""
+            }
         }
     }
 
@@ -177,7 +211,20 @@ if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides) {
     }
 
     foreach ($service in @("api1", "api2")) {
+        $serviceCpuset = $ApiCpuset
+        if ($service -eq "api1" -and -not [string]::IsNullOrWhiteSpace($Api1Cpuset)) {
+            $serviceCpuset = $Api1Cpuset
+        }
+
+        if ($service -eq "api2" -and -not [string]::IsNullOrWhiteSpace($Api2Cpuset)) {
+            $serviceCpuset = $Api2Cpuset
+        }
+
         $lines += "  ${service}:"
+        if (-not [string]::IsNullOrWhiteSpace($serviceCpuset)) {
+            $lines += "    cpuset: `"$serviceCpuset`""
+        }
+
         $lines += "    environment:"
         foreach ($item in $activeApiOverrides) {
             $lines += "      $($item.Key): `"$($item.Value)`""

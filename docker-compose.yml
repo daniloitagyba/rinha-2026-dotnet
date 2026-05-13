@@ -63,6 +63,7 @@ services:
       RISKY_TX24H_MAX: "5800"
       RISKY_MERCHANT_AVG_MAX: "420"
       RISKY_NATIVE_FINE: "1"
+      NATIVE_ANN: "1"
     volumes:
       - backend-sockets:/sockets
     security_opt:
@@ -111,6 +112,7 @@ services:
       RISKY_TX24H_MAX: "5800"
       RISKY_MERCHANT_AVG_MAX: "420"
       RISKY_NATIVE_FINE: "1"
+      NATIVE_ANN: "1"
     volumes:
       - backend-sockets:/sockets
     security_opt:

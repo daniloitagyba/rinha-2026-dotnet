@@ -9,6 +9,27 @@
 #define SCALE 10000
 #define K 5
 
+static inline int64_t distance_mapped_avx2(const int16_t *vector, const int16_t *query) {
+    const __m256i mask = _mm256_setr_epi16(
+        -1, -1, -1, -1,
+        -1, -1, -1, -1,
+        -1, -1, -1, -1,
+        -1, -1, 0, 0);
+    __m256i q = _mm256_loadu_si256((const __m256i *)query);
+    __m256i v = _mm256_loadu_si256((const __m256i *)vector);
+    __m256i diff = _mm256_and_si256(_mm256_sub_epi16(q, v), mask);
+    __m256i pairs = _mm256_madd_epi16(diff, diff);
+
+    return (int64_t)_mm256_extract_epi32(pairs, 0) +
+           (int64_t)_mm256_extract_epi32(pairs, 1) +
+           (int64_t)_mm256_extract_epi32(pairs, 2) +
+           (int64_t)_mm256_extract_epi32(pairs, 3) +
+           (int64_t)_mm256_extract_epi32(pairs, 4) +
+           (int64_t)_mm256_extract_epi32(pairs, 5) +
+           (int64_t)_mm256_extract_epi32(pairs, 6) +
+           (int64_t)_mm256_extract_epi32(pairs, 7);
+}
+
 static inline int64_t range_distance_squared(int16_t value, int min, int max) {
     if (value < min) {
         int64_t d = (int64_t)min - value;
@@ -87,6 +108,64 @@ static inline void insert_candidate(int64_t dist, uint8_t label, int64_t *top_di
         top_dist[4] = dist;
         top_label[4] = label;
     }
+}
+
+static inline int strong_decision(const uint8_t *top_label, int include_edges) {
+    int frauds = (int)top_label[0] +
+                 (int)top_label[1] +
+                 (int)top_label[2] +
+                 (int)top_label[3] +
+                 (int)top_label[4];
+    return include_edges ? (frauds <= 1 || frauds >= K - 1) : (frauds == 0 || frauds == K);
+}
+
+__attribute__((visibility("default")))
+int32_t rinha_consider_ann_avx2(
+    const int16_t *vectors,
+    const uint8_t *labels,
+    const int32_t *bucket_offsets,
+    const uint16_t *neighbor_keys,
+    const int16_t *query,
+    int32_t early_candidates,
+    int32_t min_candidates,
+    int32_t max_candidates,
+    int32_t early_edge_fallback,
+    int64_t *top_dist,
+    uint8_t *top_label) {
+    int32_t candidates = 0;
+
+    for (int neighbor_index = 0; neighbor_index < BUCKET_COUNT; neighbor_index++) {
+        int key = neighbor_keys[neighbor_index];
+        int start = bucket_offsets[key];
+        int end = bucket_offsets[key + 1];
+        int scan_end = end;
+        int remaining = max_candidates - candidates;
+        if (end - start > remaining) {
+            scan_end = start + remaining;
+        }
+
+        for (int id = start; id < scan_end; id++) {
+            int64_t dist = distance_mapped_avx2(vectors + ((int64_t)id * DIM), query);
+            if (dist < top_dist[K - 1]) {
+                insert_candidate(dist, labels[id], top_dist, top_label);
+            }
+        }
+
+        candidates += scan_end - start;
+        if (candidates >= max_candidates) {
+            return candidates;
+        }
+
+        if (candidates >= early_candidates && strong_decision(top_label, early_edge_fallback)) {
+            return candidates;
+        }
+
+        if (candidates >= min_candidates) {
+            return candidates;
+        }
+    }
+
+    return candidates;
 }
 
 __attribute__((visibility("default")))

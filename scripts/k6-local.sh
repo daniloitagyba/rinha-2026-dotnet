@@ -121,6 +121,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${RISKY_FINE_BUCKETS:-}" ] || \
    [ -n "${RISKY_SIMD:-}" ] || \
    [ -n "${RISKY_NATIVE_FINE:-}" ] || \
+   [ -n "${NATIVE_ANN:-}" ] || \
    [ -n "${BLOCK_SCAN:-}" ] || \
    [ -n "${SOCKETS_MOUNT:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
@@ -128,6 +129,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${INDEX_HUGEPAGES:-}" ] || \
    [ -n "${DOTNET_PROCESSOR_COUNT:-}" ] || \
    [ -n "${DOTNET_GCHeapCount:-}" ] || \
+   [ -n "${DOTNET_ThreadPool_UnfairSemaphoreSpinLimit:-}" ] || \
    [ -n "${DOTNET_GCConserveMemory:-}" ] || \
    [ -n "${DOTNET_EnableDiagnostics:-}" ] || \
    [ -n "${GC_LATENCY_MODE:-}" ] || \
@@ -204,12 +206,14 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${RISKY_FINE_BUCKETS:-}" ] && echo "      RISKY_FINE_BUCKETS: \"$RISKY_FINE_BUCKETS\""
       [ -n "${RISKY_SIMD:-}" ] && echo "      RISKY_SIMD: \"$RISKY_SIMD\""
       [ -n "${RISKY_NATIVE_FINE:-}" ] && echo "      RISKY_NATIVE_FINE: \"$RISKY_NATIVE_FINE\""
+      [ -n "${NATIVE_ANN:-}" ] && echo "      NATIVE_ANN: \"$NATIVE_ANN\""
       [ -n "${BLOCK_SCAN:-}" ] && echo "      BLOCK_SCAN: \"$BLOCK_SCAN\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
       [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""
       [ -n "${INDEX_HUGEPAGES:-}" ] && echo "      INDEX_HUGEPAGES: \"$INDEX_HUGEPAGES\""
       [ -n "${DOTNET_PROCESSOR_COUNT:-}" ] && echo "      DOTNET_PROCESSOR_COUNT: \"$DOTNET_PROCESSOR_COUNT\""
       [ -n "${DOTNET_GCHeapCount:-}" ] && echo "      DOTNET_GCHeapCount: \"$DOTNET_GCHeapCount\""
+      [ -n "${DOTNET_ThreadPool_UnfairSemaphoreSpinLimit:-}" ] && echo "      DOTNET_ThreadPool_UnfairSemaphoreSpinLimit: \"$DOTNET_ThreadPool_UnfairSemaphoreSpinLimit\""
       [ -n "${DOTNET_GCConserveMemory:-}" ] && echo "      DOTNET_GCConserveMemory: \"$DOTNET_GCConserveMemory\""
       [ -n "${DOTNET_EnableDiagnostics:-}" ] && echo "      DOTNET_EnableDiagnostics: \"$DOTNET_EnableDiagnostics\""
       [ -n "${GC_LATENCY_MODE:-}" ] && echo "      GC_LATENCY_MODE: \"$GC_LATENCY_MODE\""

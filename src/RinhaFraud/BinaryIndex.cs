@@ -77,6 +77,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly bool _useRiskySimd;
     private readonly bool _useRiskySoa;
     private readonly bool _useRiskyNativeFine;
+    private readonly bool _useNativeAnn;
     private readonly bool _useIvfOrder;
     private readonly bool _useMappedSimd;
     private readonly bool _useBlockScan;
@@ -122,6 +123,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         bool useRiskySimd,
         bool useRiskySoa,
         bool useRiskyNativeFine,
+        bool useNativeAnn,
         bool useIvfOrder,
         bool useMappedSimd,
         bool useBlockScan)
@@ -163,6 +165,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _useRiskySimd = useRiskySimd;
         _useRiskySoa = useRiskySoa;
         _useRiskyNativeFine = useRiskyNativeFine;
+        _useNativeAnn = useNativeAnn;
         _useIvfOrder = useIvfOrder;
         _useMappedSimd = useMappedSimd;
         _useBlockScan = useBlockScan && blockVectorsOffset != 0;
@@ -235,6 +238,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var useRiskySimd = EnvBool("RISKY_SIMD", true);
             var useRiskySoa = EnvBool("RISKY_SOA", false);
             var useRiskyNativeFine = EnvBool("RISKY_NATIVE_FINE", false);
+            var useNativeAnn = EnvBool("NATIVE_ANN", false);
             var useIvfOrder = EnvBool("IVF_ORDER", false);
             var useMappedSimd = EnvBool("MAPPED_SIMD", true);
             var useBlockScan = EnvBool("BLOCK_SCAN", false);
@@ -373,6 +377,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 useRiskySimd,
                 useRiskySoa,
                 useRiskyNativeFine,
+                useNativeAnn,
                 useIvfOrder,
                 useMappedSimd,
                 useBlockScan);
@@ -493,39 +498,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         Span<byte> topLabel = stackalloc byte[Constants.K];
         topDist.Fill(long.MaxValue);
 
-        var candidates = 0;
-        var neighborKeys = NeighborKeyOrderFor(query);
-        for (var neighborIndex = 0; neighborIndex < neighborKeys.Length; neighborIndex++)
-        {
-            var key = neighborKeys[neighborIndex];
-            var start = BucketOffset(key);
-            var end = BucketOffset(key + 1);
-            var scanEnd = end;
-            var remaining = searchParams.MaxCandidates - candidates;
-            if (end - start > remaining)
-            {
-                scanEnd = start + (uint)remaining;
-            }
-
-            ConsiderCandidateRange(query, start, scanEnd, topDist, topLabel);
-            candidates += (int)(scanEnd - start);
-            if (candidates >= searchParams.MaxCandidates)
-            {
-                goto CandidateSearchDone;
-            }
-
-            if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel, searchParams.EarlyEdgeFallback))
-            {
-                goto CandidateSearchDone;
-            }
-
-            if (candidates >= searchParams.MinCandidates)
-            {
-                goto CandidateSearchDone;
-            }
-        }
-
-CandidateSearchDone:
+        var candidates = ConsiderCandidateSearch(query, searchParams, topDist, topLabel);
         if (candidates < Constants.K)
         {
             return ClassifyFlat(query);
@@ -578,39 +551,7 @@ CandidateSearchDone:
         Span<byte> topLabel = stackalloc byte[Constants.K];
         topDist.Fill(long.MaxValue);
 
-        var candidates = 0;
-        var neighborKeys = NeighborKeyOrderFor(query);
-        for (var neighborIndex = 0; neighborIndex < neighborKeys.Length; neighborIndex++)
-        {
-            var key = neighborKeys[neighborIndex];
-            var start = BucketOffset(key);
-            var end = BucketOffset(key + 1);
-            var scanEnd = end;
-            var remaining = searchParams.MaxCandidates - candidates;
-            if (end - start > remaining)
-            {
-                scanEnd = start + (uint)remaining;
-            }
-
-            ConsiderCandidateRange(query, start, scanEnd, topDist, topLabel);
-            candidates += (int)(scanEnd - start);
-            if (candidates >= searchParams.MaxCandidates)
-            {
-                goto CandidateSearchDone;
-            }
-
-            if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel, searchParams.EarlyEdgeFallback))
-            {
-                goto CandidateSearchDone;
-            }
-
-            if (candidates >= searchParams.MinCandidates)
-            {
-                goto CandidateSearchDone;
-            }
-        }
-
-CandidateSearchDone:
+        var candidates = ConsiderCandidateSearch(query, searchParams, topDist, topLabel);
         if (candidates < Constants.K)
         {
             var flatFrauds = ClassifyFlat(query, out var flatCandidates);
@@ -659,6 +600,94 @@ CandidateSearchDone:
             candidates,
             flatFallbackCandidates,
             started);
+    }
+
+    [SkipLocalsInit]
+    private int ConsiderCandidateSearch(
+        ReadOnlySpan<short> query,
+        in SearchParams searchParams,
+        Span<long> topDist,
+        Span<byte> topLabel)
+    {
+        if (_useNativeAnn && _useMappedSimd && Avx2.IsSupported)
+        {
+            return ConsiderCandidateSearchNative(query, searchParams, topDist, topLabel);
+        }
+
+        return ConsiderCandidateSearchManaged(query, searchParams, topDist, topLabel);
+    }
+
+    private int ConsiderCandidateSearchManaged(
+        ReadOnlySpan<short> query,
+        in SearchParams searchParams,
+        Span<long> topDist,
+        Span<byte> topLabel)
+    {
+        var candidates = 0;
+        var neighborKeys = NeighborKeyOrderFor(query);
+        for (var neighborIndex = 0; neighborIndex < neighborKeys.Length; neighborIndex++)
+        {
+            var key = neighborKeys[neighborIndex];
+            var start = BucketOffset(key);
+            var end = BucketOffset(key + 1);
+            var scanEnd = end;
+            var remaining = searchParams.MaxCandidates - candidates;
+            if (end - start > remaining)
+            {
+                scanEnd = start + (uint)remaining;
+            }
+
+            ConsiderCandidateRange(query, start, scanEnd, topDist, topLabel);
+            candidates += (int)(scanEnd - start);
+            if (candidates >= searchParams.MaxCandidates)
+            {
+                return candidates;
+            }
+
+            if (candidates >= searchParams.EarlyCandidates && StrongDecision(topLabel, searchParams.EarlyEdgeFallback))
+            {
+                return candidates;
+            }
+
+            if (candidates >= searchParams.MinCandidates)
+            {
+                return candidates;
+            }
+        }
+
+        return candidates;
+    }
+
+    [SkipLocalsInit]
+    private int ConsiderCandidateSearchNative(
+        ReadOnlySpan<short> query,
+        in SearchParams searchParams,
+        Span<long> topDist,
+        Span<byte> topLabel)
+    {
+        Span<short> paddedQuery = stackalloc short[RiskyVectorStride];
+        paddedQuery.Clear();
+        query.CopyTo(paddedQuery);
+
+        var neighborKeys = NeighborKeyOrderFor(query);
+        fixed (short* queryPtr = paddedQuery)
+        fixed (ushort* neighborKeysPtr = neighborKeys)
+        fixed (long* topDistPtr = topDist)
+        fixed (byte* topLabelPtr = topLabel)
+        {
+            return NativeConsiderAnnAvx2(
+                (short*)(_ptr + _vectorsOffset),
+                _ptr + _labelsOffset,
+                (int*)(_ptr + _bucketOffsetsOffset),
+                neighborKeysPtr,
+                queryPtr,
+                searchParams.EarlyCandidates,
+                searchParams.MinCandidates,
+                searchParams.MaxCandidates,
+                searchParams.EarlyEdgeFallback ? 1 : 0,
+                topDistPtr,
+                topLabelPtr);
+        }
     }
 
     [SkipLocalsInit]
@@ -2377,6 +2406,20 @@ CandidateSearchDone:
 
     [DllImport("libc", EntryPoint = "madvise", SetLastError = true)]
     private static extern int madvise(nint address, nuint length, int advice);
+
+    [DllImport("rinha_native", EntryPoint = "rinha_consider_ann_avx2")]
+    private static extern int NativeConsiderAnnAvx2(
+        short* vectors,
+        byte* labels,
+        int* bucketOffsets,
+        ushort* neighborKeys,
+        short* query,
+        int earlyCandidates,
+        int minCandidates,
+        int maxCandidates,
+        int earlyEdgeFallback,
+        long* topDist,
+        byte* topLabel);
 
     [DllImport("rinha_native", EntryPoint = "rinha_consider_risky_fine_avx2")]
     private static extern int NativeConsiderRiskyFineAvx2(

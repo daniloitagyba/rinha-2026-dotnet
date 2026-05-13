@@ -14,15 +14,15 @@
 #include <unistd.h>
 
 #define BUFFER_SIZE 16384
-#define BACKEND_COUNT 2
+#define MAX_BACKENDS 8
 #define MAX_EVENTS 1024
 
-static const char *backend_paths[BACKEND_COUNT] = {
+static const char *backend_paths[MAX_BACKENDS] = {
     "/sockets/api1.sock",
     "/sockets/api2.sock",
 };
 
-static const char *control_paths[BACKEND_COUNT] = {
+static const char *control_paths[MAX_BACKENDS] = {
     "/sockets/api1.sock.ctrl",
     "/sockets/api2.sock.ctrl",
 };
@@ -51,8 +51,10 @@ struct connection {
 };
 
 static unsigned int next_backend = 0;
+static unsigned int backend_count = 2;
 static connection_t *closed_head = NULL;
-static int control_fds[BACKEND_COUNT] = {-1, -1};
+static int control_fds[MAX_BACKENDS];
+static char upstreams_storage[1024];
 
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -89,13 +91,13 @@ static void set_small_socket_buffers(int fd) {
 
 static unsigned int choose_backend(void) {
     unsigned int backend = next_backend;
-    next_backend = (next_backend + 1) % BACKEND_COUNT;
+    next_backend = (next_backend + 1) % backend_count;
     return backend;
 }
 
 static int connect_backend(unsigned int start) {
-    for (unsigned int attempt = 0; attempt < BACKEND_COUNT; attempt++) {
-        unsigned int index = (start + attempt) % BACKEND_COUNT;
+    for (unsigned int attempt = 0; attempt < backend_count; attempt++) {
+        unsigned int index = (start + attempt) % backend_count;
         int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
         if (fd < 0) {
             continue;
@@ -389,8 +391,8 @@ static void accept_clients_fdpass(int listener) {
 
         unsigned int start = choose_backend();
         int delivered = 0;
-        for (unsigned int attempt = 0; attempt < BACKEND_COUNT; attempt++) {
-            unsigned int index = (start + attempt) % BACKEND_COUNT;
+        for (unsigned int attempt = 0; attempt < backend_count; attempt++) {
+            unsigned int index = (start + attempt) % backend_count;
             int control_fd = ensure_control(index);
             if (control_fd >= 0 && send_fd(control_fd, client_fd) == 0) {
                 delivered = 1;
@@ -457,7 +459,7 @@ static int run_fdpass(int listener, int port) {
 
     close(listener);
     close(epoll_fd);
-    for (int i = 0; i < BACKEND_COUNT; i++) {
+    for (unsigned int i = 0; i < backend_count; i++) {
         if (control_fds[i] >= 0) {
             close(control_fds[i]);
             control_fds[i] = -1;
@@ -465,6 +467,50 @@ static int run_fdpass(int listener, int port) {
     }
 
     return 1;
+}
+
+static void init_backends(int fdpass_mode) {
+    for (int i = 0; i < MAX_BACKENDS; i++) {
+        control_fds[i] = -1;
+    }
+
+    const char *upstreams = getenv("UPSTREAMS");
+    if (upstreams == NULL || *upstreams == '\0') {
+        return;
+    }
+
+    strncpy(upstreams_storage, upstreams, sizeof(upstreams_storage) - 1);
+    upstreams_storage[sizeof(upstreams_storage) - 1] = '\0';
+
+    unsigned int count = 0;
+    char *save = NULL;
+    char *item = strtok_r(upstreams_storage, ",", &save);
+    while (item != NULL && count < MAX_BACKENDS) {
+        while (*item == ' ' || *item == '\t') {
+            item++;
+        }
+
+        char *end = item + strlen(item);
+        while (end > item && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\n' || end[-1] == '\r')) {
+            *--end = '\0';
+        }
+
+        if (*item != '\0') {
+            if (fdpass_mode) {
+                control_paths[count] = item;
+            } else {
+                backend_paths[count] = item;
+            }
+
+            count++;
+        }
+
+        item = strtok_r(NULL, ",", &save);
+    }
+
+    if (count > 0) {
+        backend_count = count;
+    }
 }
 
 static void process_proxy_event(int epoll_fd, fd_state_t *state, uint32_t events) {
@@ -571,7 +617,10 @@ int main(void) {
     }
 
     const char *mode = getenv("LB_MODE");
-    if (mode != NULL && strcmp(mode, "fdpass") == 0) {
+    int fdpass_mode = mode != NULL && strcmp(mode, "fdpass") == 0;
+    init_backends(fdpass_mode);
+
+    if (fdpass_mode) {
         return run_fdpass(listener, port);
     }
 

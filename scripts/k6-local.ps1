@@ -28,6 +28,8 @@ param(
     [string]$RiskyCompact = $env:RISKY_COMPACT,
     [string]$RiskyFineBuckets = $env:RISKY_FINE_BUCKETS,
     [string]$RiskySimd = $env:RISKY_SIMD,
+    [string]$RiskyNativeFine = $env:RISKY_NATIVE_FINE,
+    [string]$BlockScan = $env:BLOCK_SCAN,
     [string]$SocketsMount = $env:SOCKETS_MOUNT,
     [string]$Workers = $env:WORKERS,
     [string]$ServerMode = $env:SERVER_MODE,
@@ -139,6 +141,8 @@ $apiOverrides = [ordered]@{
     "RISKY_COMPACT" = $RiskyCompact
     "RISKY_FINE_BUCKETS" = $RiskyFineBuckets
     "RISKY_SIMD" = $RiskySimd
+    "RISKY_NATIVE_FINE" = $RiskyNativeFine
+    "BLOCK_SCAN" = $BlockScan
     "WORKERS" = $Workers
     "SERVER_MODE" = $ServerMode
     "INDEX_HUGEPAGES" = $IndexHugePages

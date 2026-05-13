@@ -17,6 +17,8 @@ internal static class BinaryIndexBuilder
     private const int RiskyFineBucketsPerCoarse = 1 << RiskyFineExtraBits;
     private const int RiskyFineBucketCount = Constants.BucketCount << RiskyFineExtraBits;
     private const int ProfileKeyCount = 1 << 22;
+    private const int BlockLaneCount = 8;
+    private const int BlockVectorStride = Constants.Dim * BlockLaneCount;
 
     private const uint SectionProfileCounts = 1;
     private const uint SectionProfileMasks = 2;
@@ -30,6 +32,7 @@ internal static class BinaryIndexBuilder
     private const uint SectionRiskyFineKeys = 10;
     private const uint SectionRiskySoa = 11;
     private const uint SectionIvfOrders = 12;
+    private const uint SectionBlockVectors = 13;
 
     public static void Build(string outputPath, Stream input)
     {
@@ -148,8 +151,38 @@ internal static class BinaryIndexBuilder
         WriteProfileSections(output, vectors, labels, orderedOriginalIds, sections);
         WriteNeighborOrdersSection(output, sections);
         WriteIvfOrdersSection(output, vectors, orderedOriginalIds, sections);
+        if (EnvBool("BUILD_BLOCK_INDEX", false))
+        {
+            WriteBlockVectorsSection(output, vectors, orderedOriginalIds, sections);
+        }
+
         WriteRiskySections(output, vectors, labels, orderedOriginalIds, sections);
         return WriteExtensionDirectory(output, sections);
+    }
+
+    private static void WriteBlockVectorsSection(
+        FileStream output,
+        ReadOnlySpan<short> vectors,
+        ReadOnlySpan<uint> orderedOriginalIds,
+        List<SectionEntry> sections)
+    {
+        var blockCount = (orderedOriginalIds.Length + BlockLaneCount - 1) / BlockLaneCount;
+        var blockVectors = new short[blockCount * BlockVectorStride];
+        Array.Fill(blockVectors, short.MaxValue);
+
+        for (var mappedId = 0; mappedId < orderedOriginalIds.Length; mappedId++)
+        {
+            var originalId = (int)orderedOriginalIds[mappedId];
+            var lane = mappedId & (BlockLaneCount - 1);
+            var blockBase = (mappedId / BlockLaneCount) * BlockVectorStride;
+            var source = vectors.Slice(originalId * Constants.Dim, Constants.Dim);
+            for (var dim = 0; dim < Constants.Dim; dim++)
+            {
+                blockVectors[blockBase + dim * BlockLaneCount + lane] = source[dim];
+            }
+        }
+
+        WriteSection(output, SectionBlockVectors, MemoryMarshal.AsBytes(blockVectors.AsSpan()), sections);
     }
 
     private static void WriteProfileSections(
@@ -434,6 +467,19 @@ internal static class BinaryIndexBuilder
         key |= (vector[1] > 1000 ? 1 : 0) << 19;
         key |= Vectorizer.Bucket4(vector[13]) << 20;
         return key;
+    }
+
+    private static bool EnvBool(string name, bool fallback)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return fallback;
+        }
+
+        return value == "1" ||
+               value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("yes", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsRiskyFallbackReference(ReadOnlySpan<short> vector, in RiskyFallbackFilter filter)

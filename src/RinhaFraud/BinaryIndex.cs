@@ -22,6 +22,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private const int RiskyFineExtraBits = 3;
     private const int RiskyFineBucketsPerCoarse = 1 << RiskyFineExtraBits;
     private const int RiskyFineBucketCount = Constants.BucketCount << RiskyFineExtraBits;
+    private const int BlockLaneCount = 8;
+    private const int BlockVectorStride = Constants.Dim * BlockLaneCount;
     private const byte LegitMask = 1;
     private const byte FraudMask = 2;
     private const uint SectionProfileCounts = 1;
@@ -36,6 +38,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private const uint SectionRiskyFineKeys = 10;
     private const uint SectionRiskySoa = 11;
     private const uint SectionIvfOrders = 12;
+    private const uint SectionBlockVectors = 13;
 
     private readonly MemoryMappedFile _mappedFile;
     private readonly MemoryMappedViewAccessor _accessor;
@@ -58,6 +61,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly int[] _riskyFineKeys;
     private readonly long _neighborOrdersOffset;
     private readonly long _ivfOrdersOffset;
+    private readonly long _blockVectorsOffset;
     private readonly int _riskyMappedCount;
     private readonly int _riskyMappedFineKeyCount;
     private readonly long _riskyMappedVectorsOffset;
@@ -72,8 +76,10 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly bool _useRiskyCompact;
     private readonly bool _useRiskySimd;
     private readonly bool _useRiskySoa;
+    private readonly bool _useRiskyNativeFine;
     private readonly bool _useIvfOrder;
     private readonly bool _useMappedSimd;
+    private readonly bool _useBlockScan;
 
     public int RiskyFallbackCount => HasMappedRisky ? _riskyMappedCount : _useRiskyCompact ? _riskyFallbackLabels.Length : _riskyFallbackIds.Length;
     private bool HasMappedRisky => _riskyMappedCount > 0;
@@ -100,6 +106,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         int[] riskyFineKeys,
         long neighborOrdersOffset,
         long ivfOrdersOffset,
+        long blockVectorsOffset,
         int riskyMappedCount,
         int riskyMappedFineKeyCount,
         long riskyMappedVectorsOffset,
@@ -114,8 +121,10 @@ internal unsafe sealed class BinaryIndex : IDisposable
         bool useRiskyCompact,
         bool useRiskySimd,
         bool useRiskySoa,
+        bool useRiskyNativeFine,
         bool useIvfOrder,
-        bool useMappedSimd)
+        bool useMappedSimd,
+        bool useBlockScan)
     {
         _mappedFile = mappedFile;
         _accessor = accessor;
@@ -138,6 +147,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _riskyFineKeys = riskyFineKeys;
         _neighborOrdersOffset = neighborOrdersOffset;
         _ivfOrdersOffset = ivfOrdersOffset;
+        _blockVectorsOffset = blockVectorsOffset;
         _riskyMappedCount = riskyMappedCount;
         _riskyMappedFineKeyCount = riskyMappedFineKeyCount;
         _riskyMappedVectorsOffset = riskyMappedVectorsOffset;
@@ -152,8 +162,10 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _useRiskyCompact = useRiskyCompact;
         _useRiskySimd = useRiskySimd;
         _useRiskySoa = useRiskySoa;
+        _useRiskyNativeFine = useRiskyNativeFine;
         _useIvfOrder = useIvfOrder;
         _useMappedSimd = useMappedSimd;
+        _useBlockScan = useBlockScan && blockVectorsOffset != 0;
     }
 
     public static BinaryIndex Open(string path)
@@ -222,8 +234,10 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var useRiskyFineBuckets = EnvBool("RISKY_FINE_BUCKETS", true);
             var useRiskySimd = EnvBool("RISKY_SIMD", true);
             var useRiskySoa = EnvBool("RISKY_SOA", false);
+            var useRiskyNativeFine = EnvBool("RISKY_NATIVE_FINE", false);
             var useIvfOrder = EnvBool("IVF_ORDER", false);
             var useMappedSimd = EnvBool("MAPPED_SIMD", true);
+            var useBlockScan = EnvBool("BLOCK_SCAN", false);
             var sections = version >= 2 && extensionDirectoryOffset != 0
                 ? ReadExtensionSections(ptr, fileLength, extensionDirectoryOffset)
                 : default;
@@ -313,6 +327,13 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 Constants.BucketCount * Constants.BucketCount * 2L)
                 ? sections.IvfOrdersOffset
                 : 0;
+            var blockCount = (count + BlockLaneCount - 1) / BlockLaneCount;
+            var blockVectorsOffset = ValidSection(
+                sections.BlockVectorsOffset,
+                sections.BlockVectorsLength,
+                blockCount * BlockVectorStride * 2L)
+                ? sections.BlockVectorsOffset
+                : 0;
 
             return new BinaryIndex(
                 mappedFile,
@@ -336,6 +357,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 riskyFineKeys,
                 neighborOrdersOffset,
                 ivfOrdersOffset,
+                blockVectorsOffset,
                 riskyMappedCount,
                 riskyMappedFineKeyCount,
                 riskyMappedVectorsOffset,
@@ -350,8 +372,10 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 useRiskyCompact,
                 useRiskySimd,
                 useRiskySoa,
+                useRiskyNativeFine,
                 useIvfOrder,
-                useMappedSimd);
+                useMappedSimd,
+                useBlockScan);
         }
         catch
         {
@@ -365,7 +389,16 @@ internal unsafe sealed class BinaryIndex : IDisposable
     public int Prefault()
     {
         var checksum = 0;
-        checksum ^= PrefaultRange(_vectorsOffset, _count * Constants.Dim * 2L);
+        if (_useBlockScan && _blockVectorsOffset != 0)
+        {
+            var blockCount = (_count + BlockLaneCount - 1) / BlockLaneCount;
+            checksum ^= PrefaultRange(_blockVectorsOffset, blockCount * BlockVectorStride * 2L);
+        }
+        else
+        {
+            checksum ^= PrefaultRange(_vectorsOffset, _count * Constants.Dim * 2L);
+        }
+
         checksum ^= PrefaultRange(_labelsOffset, _count);
         checksum ^= PrefaultRange(_bucketOffsetsOffset, (Constants.BucketCount + 1L) * 4L);
         if (_profileCountsOffset != 0)
@@ -835,6 +868,21 @@ CandidateSearchDone:
         usedFullFlat = false;
         fallbackCandidates = 0;
 
+        if (_useRiskyNativeFine && HasMappedRisky && Avx2.IsSupported)
+        {
+            fallbackCandidates = ConsiderRiskyFineBucketedNative(query, topDist, topLabel);
+            var nativeFrauds = CountFrauds(topLabel);
+            if (allowFullTiebreak && NeedsFullRiskyTiebreak(query, nativeFrauds))
+            {
+                usedFullFlat = true;
+                var flatFrauds = ClassifyFlat(query, topDist[Constants.K - 1], out var flatCandidates);
+                fallbackCandidates += flatCandidates;
+                return flatFrauds;
+            }
+
+            return nativeFrauds;
+        }
+
         Span<int> orderedFineKeys = stackalloc int[RiskyFineBucketsPerCoarse];
         Span<long> orderedFineBounds = stackalloc long[RiskyFineBucketsPerCoarse];
         Span<long> amountBounds = stackalloc long[8];
@@ -946,6 +994,32 @@ CandidateSearchDone:
         }
 
         return frauds;
+    }
+
+    [SkipLocalsInit]
+    private int ConsiderRiskyFineBucketedNative(ReadOnlySpan<short> query, Span<long> topDist, Span<byte> topLabel)
+    {
+        Span<short> paddedQuery = stackalloc short[RiskyVectorStride];
+        paddedQuery.Clear();
+        query.CopyTo(paddedQuery);
+
+        var neighborKeys = NeighborKeyOrderFor(query);
+        fixed (short* queryPtr = paddedQuery)
+        fixed (long* topDistPtr = topDist)
+        fixed (byte* topLabelPtr = topLabel)
+        fixed (ushort* neighborKeysPtr = neighborKeys)
+        {
+            return NativeConsiderRiskyFineAvx2(
+                (short*)(_ptr + _riskyMappedVectorsOffset),
+                _ptr + _riskyMappedLabelsOffset,
+                (int*)(_ptr + _riskyMappedFineBucketOffsetsOffset),
+                (int*)(_ptr + _riskyMappedCoarseFineOffsetsOffset),
+                (int*)(_ptr + _riskyMappedFineKeysOffset),
+                neighborKeysPtr,
+                queryPtr,
+                topDistPtr,
+                topLabelPtr);
+        }
     }
 
     [SkipLocalsInit]
@@ -1380,6 +1454,12 @@ CandidateSearchDone:
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ConsiderCandidateRange(ReadOnlySpan<short> query, uint start, uint end, Span<long> topDist, Span<byte> topLabel)
     {
+        if (_useBlockScan && Avx2.IsSupported)
+        {
+            ConsiderCandidateRangeBlockAvx2(query, start, end, topDist, topLabel);
+            return;
+        }
+
         if (_useMappedSimd && Avx2.IsSupported)
         {
             ConsiderCandidateRangeAvx2(query, start, end, topDist, topLabel);
@@ -1414,6 +1494,107 @@ CandidateSearchDone:
                 InsertRiskyCandidate(dist, labelBase[id], topDist, topLabel);
             }
         }
+    }
+
+    [SkipLocalsInit]
+    private void ConsiderCandidateRangeBlockAvx2(ReadOnlySpan<short> query, uint start, uint end, Span<long> topDist, Span<byte> topLabel)
+    {
+        Span<short> paddedQuery = stackalloc short[RiskyVectorStride];
+        paddedQuery.Clear();
+        query.CopyTo(paddedQuery);
+
+        fixed (short* queryPtr = paddedQuery)
+        {
+            var vectorBase = (short*)(_ptr + _vectorsOffset);
+            var blockBase = (short*)(_ptr + _blockVectorsOffset);
+            var labelBase = _ptr + _labelsOffset;
+            var id = start;
+
+            while (id < end && (id & (BlockLaneCount - 1)) != 0)
+            {
+                var dist = DistanceSquaredMappedAvx2(vectorBase + id * Constants.Dim, queryPtr);
+                if (dist < topDist[4])
+                {
+                    InsertRiskyCandidate(dist, labelBase[id], topDist, topLabel);
+                }
+
+                id++;
+            }
+
+            while (id + BlockLaneCount <= end)
+            {
+                ConsiderCandidateBlockAvx2(
+                    blockBase + (id / BlockLaneCount) * BlockVectorStride,
+                    labelBase + id,
+                    queryPtr,
+                    topDist,
+                    topLabel);
+                id += BlockLaneCount;
+            }
+
+            while (id < end)
+            {
+                var dist = DistanceSquaredMappedAvx2(vectorBase + id * Constants.Dim, queryPtr);
+                if (dist < topDist[4])
+                {
+                    InsertRiskyCandidate(dist, labelBase[id], topDist, topLabel);
+                }
+
+                id++;
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void ConsiderCandidateBlockAvx2(short* block, byte* labels, short* query, Span<long> topDist, Span<byte> topLabel)
+    {
+        var acc0 = Vector256<long>.Zero;
+        var acc1 = Vector256<long>.Zero;
+
+        for (var dim = 0; dim < Constants.Dim; dim++)
+        {
+            var refs16 = Sse2.LoadVector128(block + dim * BlockLaneCount);
+            var refs32 = Avx2.ConvertToVector256Int32(refs16);
+            var diff = Avx2.Subtract(refs32, Vector256.Create((int)query[dim]));
+            var squares = Avx2.MultiplyLow(diff, diff);
+            acc0 = Avx2.Add(acc0, Avx2.ConvertToVector256Int64(squares.GetLower()));
+            acc1 = Avx2.Add(acc1, Avx2.ConvertToVector256Int64(squares.GetUpper()));
+
+            if (dim == 7 && AllDistancesAtLeast(acc0, acc1, topDist[4]))
+            {
+                return;
+            }
+        }
+
+        var d0 = acc0.GetElement(0);
+        if (d0 < topDist[4]) InsertRiskyCandidate(d0, labels[0], topDist, topLabel);
+        var d1 = acc0.GetElement(1);
+        if (d1 < topDist[4]) InsertRiskyCandidate(d1, labels[1], topDist, topLabel);
+        var d2 = acc0.GetElement(2);
+        if (d2 < topDist[4]) InsertRiskyCandidate(d2, labels[2], topDist, topLabel);
+        var d3 = acc0.GetElement(3);
+        if (d3 < topDist[4]) InsertRiskyCandidate(d3, labels[3], topDist, topLabel);
+        var d4 = acc1.GetElement(0);
+        if (d4 < topDist[4]) InsertRiskyCandidate(d4, labels[4], topDist, topLabel);
+        var d5 = acc1.GetElement(1);
+        if (d5 < topDist[4]) InsertRiskyCandidate(d5, labels[5], topDist, topLabel);
+        var d6 = acc1.GetElement(2);
+        if (d6 < topDist[4]) InsertRiskyCandidate(d6, labels[6], topDist, topLabel);
+        var d7 = acc1.GetElement(3);
+        if (d7 < topDist[4]) InsertRiskyCandidate(d7, labels[7], topDist, topLabel);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool AllDistancesAtLeast(Vector256<long> acc0, Vector256<long> acc1, long cutoff)
+    {
+        return acc0.GetElement(0) >= cutoff &&
+               acc0.GetElement(1) >= cutoff &&
+               acc0.GetElement(2) >= cutoff &&
+               acc0.GetElement(3) >= cutoff &&
+               acc1.GetElement(0) >= cutoff &&
+               acc1.GetElement(1) >= cutoff &&
+               acc1.GetElement(2) >= cutoff &&
+               acc1.GetElement(3) >= cutoff;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1830,6 +2011,10 @@ CandidateSearchDone:
                     sections.IvfOrdersOffset = offset;
                     sections.IvfOrdersLength = length;
                     break;
+                case SectionBlockVectors:
+                    sections.BlockVectorsOffset = offset;
+                    sections.BlockVectorsLength = length;
+                    break;
             }
         }
 
@@ -2180,6 +2365,8 @@ CandidateSearchDone:
         public long RiskySoaLength;
         public long IvfOrdersOffset;
         public long IvfOrdersLength;
+        public long BlockVectorsOffset;
+        public long BlockVectorsLength;
     }
 
     private static bool EnvBool(string name, bool fallback)
@@ -2190,6 +2377,18 @@ CandidateSearchDone:
 
     [DllImport("libc", EntryPoint = "madvise", SetLastError = true)]
     private static extern int madvise(nint address, nuint length, int advice);
+
+    [DllImport("rinha_native", EntryPoint = "rinha_consider_risky_fine_avx2")]
+    private static extern int NativeConsiderRiskyFineAvx2(
+        short* vectors,
+        byte* labels,
+        int* fineBucketOffsets,
+        int* coarseFineOffsets,
+        int* fineKeys,
+        ushort* neighborKeys,
+        short* query,
+        long* topDist,
+        byte* topLabel);
 
     private static bool NeedsFullRiskyTiebreak(ReadOnlySpan<short> query, int frauds)
     {

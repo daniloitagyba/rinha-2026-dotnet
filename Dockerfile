@@ -5,6 +5,7 @@ WORKDIR /src
 COPY . .
 
 ARG TARGETARCH
+ARG BUILD_BLOCK_INDEX=0
 RUN case "$TARGETARCH" in \
       amd64) RID=linux-x64 ;; \
       arm64) RID=linux-arm64 ;; \
@@ -13,15 +14,17 @@ RUN case "$TARGETARCH" in \
     && dotnet publish src/RinhaFraud/RinhaFraud.csproj -c Release -r "$RID" -o /out/app
 RUN mkdir -p /out/lb \
     && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -pthread -o /out/lb/rinha-lb src/lb/rinha-lb.c
+RUN mkdir -p /out/native \
+    && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -fPIC -shared -o /out/native/librinha_native.so src/native/rinha_native.c
 RUN mkdir -p /out/data \
     && if [ -f resources/references.json.gz ]; then \
-         gzip -dc resources/references.json.gz | /out/app/RinhaFraud build-index /out/data/references.idx ; \
+         gzip -dc resources/references.json.gz | BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" /out/app/RinhaFraud build-index /out/data/references.idx ; \
        elif [ -f data/references.idx ]; then \
          cp data/references.idx /out/data/references.idx ; \
        else \
          curl -fsSL https://raw.githubusercontent.com/zanfranceschi/rinha-de-backend-2026/main/resources/references.json.gz \
            | gzip -dc \
-           | /out/app/RinhaFraud build-index /out/data/references.idx ; \
+           | BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" /out/app/RinhaFraud build-index /out/data/references.idx ; \
        fi \
     && test -s /out/data/references.idx
 
@@ -30,8 +33,10 @@ FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble
 WORKDIR /app
 COPY --from=builder /out/app/RinhaFraud /usr/local/bin/rinha-fraud
 COPY --from=builder /out/lb/rinha-lb /usr/local/bin/rinha-lb
+COPY --from=builder /out/native/librinha_native.so /usr/local/lib/librinha_native.so
 COPY --from=builder /out/data /app/data
 
+ENV LD_LIBRARY_PATH=/usr/local/lib
 ENV BIND_ADDR=0.0.0.0:8080
 ENV INDEX_PATH=/app/data/references.idx
 ENV SERVER_MODE=raw

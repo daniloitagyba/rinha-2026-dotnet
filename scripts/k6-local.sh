@@ -120,6 +120,8 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${RISKY_COMPACT:-}" ] || \
    [ -n "${RISKY_FINE_BUCKETS:-}" ] || \
    [ -n "${RISKY_SIMD:-}" ] || \
+   [ -n "${RISKY_NATIVE_FINE:-}" ] || \
+   [ -n "${BLOCK_SCAN:-}" ] || \
    [ -n "${SOCKETS_MOUNT:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
    [ -n "${SERVER_MODE:-}" ] || \
@@ -201,6 +203,8 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${RISKY_COMPACT:-}" ] && echo "      RISKY_COMPACT: \"$RISKY_COMPACT\""
       [ -n "${RISKY_FINE_BUCKETS:-}" ] && echo "      RISKY_FINE_BUCKETS: \"$RISKY_FINE_BUCKETS\""
       [ -n "${RISKY_SIMD:-}" ] && echo "      RISKY_SIMD: \"$RISKY_SIMD\""
+      [ -n "${RISKY_NATIVE_FINE:-}" ] && echo "      RISKY_NATIVE_FINE: \"$RISKY_NATIVE_FINE\""
+      [ -n "${BLOCK_SCAN:-}" ] && echo "      BLOCK_SCAN: \"$BLOCK_SCAN\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
       [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""
       [ -n "${INDEX_HUGEPAGES:-}" ] && echo "      INDEX_HUGEPAGES: \"$INDEX_HUGEPAGES\""

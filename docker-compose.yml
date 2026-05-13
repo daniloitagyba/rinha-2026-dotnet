@@ -22,7 +22,7 @@ services:
       resources:
         limits:
           cpus: "0.12"
-          memory: "24MB"
+          memory: "32MB"
 
   api1:
     image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:dd28f4b09a6646ccd89d42d9705413b30561ad0d
@@ -66,7 +66,7 @@ services:
       resources:
         limits:
           cpus: "0.44"
-          memory: "160MB"
+          memory: "156MB"
 
   api2:
     image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:dd28f4b09a6646ccd89d42d9705413b30561ad0d
@@ -110,7 +110,7 @@ services:
       resources:
         limits:
           cpus: "0.44"
-          memory: "160MB"
+          memory: "156MB"
 
 volumes:
   backend-sockets:

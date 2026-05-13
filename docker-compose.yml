@@ -21,7 +21,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.19"
+          cpus: "0.15"
           memory: "32MB"
 
   api1:
@@ -30,6 +30,7 @@ services:
     environment:
       BIND_ADDR: fd:/sockets/api1.sock.ctrl
       INDEX_PATH: /app/data/references.idx
+      INDEX_HUGEPAGES: "1"
       SERVER_MODE: raw
       TP_MIN_THREADS: "64"
       WORKERS: "2"
@@ -64,7 +65,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.405"
+          cpus: "0.425"
           memory: "156MB"
 
   api2:
@@ -73,6 +74,7 @@ services:
     environment:
       BIND_ADDR: fd:/sockets/api2.sock.ctrl
       INDEX_PATH: /app/data/references.idx
+      INDEX_HUGEPAGES: "1"
       SERVER_MODE: raw
       TP_MIN_THREADS: "64"
       WORKERS: "2"
@@ -107,7 +109,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.405"
+          cpus: "0.425"
           memory: "156MB"
 
 volumes:

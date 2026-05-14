@@ -20,7 +20,7 @@ internal static class SelfTest
     {
         var body = Encoding.UTF8.GetBytes(LegitPayload);
         Assert(PayloadParser.TryParse(body, out var payload), "legit payload should parse");
-        Span<short> vector = stackalloc short[Constants.Dim];
+        Span<short> vector = stackalloc short[Constants.PaddedDim];
         Vectorizer.Vectorize(payload, vector);
 
         AssertEqual(41, vector[0], "amount");
@@ -40,7 +40,7 @@ internal static class SelfTest
     {
         var body = Encoding.UTF8.GetBytes(FraudPayload);
         Assert(PayloadParser.TryParse(body, out var payload), "fraud payload should parse");
-        Span<short> vector = stackalloc short[Constants.Dim];
+        Span<short> vector = stackalloc short[Constants.PaddedDim];
         Vectorizer.Vectorize(payload, vector);
 
         AssertEqual(9506, vector[0], "amount");
@@ -75,13 +75,13 @@ internal static class SelfTest
                 exactFallback: SearchParams.ExactFallbackOff,
                 earlyEdgeFallback: false);
 
-            Span<short> legitVector = stackalloc short[Constants.Dim];
+            Span<short> legitVector = stackalloc short[Constants.PaddedDim];
             var legitBytes = Encoding.UTF8.GetBytes(LegitPayload);
             Assert(PayloadParser.TryParse(legitBytes, out var legit), "legit payload should parse for classify");
             Vectorizer.Vectorize(legit, legitVector);
             Assert(index.ClassifyFraudCount(legitVector, searchParams) < 3, "legit sample should be approved");
 
-            Span<short> fraudVector = stackalloc short[Constants.Dim];
+            Span<short> fraudVector = stackalloc short[Constants.PaddedDim];
             var fraudBytes = Encoding.UTF8.GetBytes(FraudPayload);
             Assert(PayloadParser.TryParse(fraudBytes, out var fraud), "fraud payload should parse for classify");
             Vectorizer.Vectorize(fraud, fraudVector);
@@ -109,7 +109,7 @@ internal static class SelfTest
     {
         Span<ushort> dynamic = stackalloc ushort[Constants.BucketCount];
         Span<byte> seen = stackalloc byte[Constants.BucketCount];
-        Span<short> query = stackalloc short[Constants.Dim];
+        Span<short> query = stackalloc short[Constants.PaddedDim];
 
         for (var bucketKey = 0; bucketKey < Constants.BucketCount; bucketKey++)
         {
@@ -140,8 +140,8 @@ internal static class SelfTest
         var body = Encoding.UTF8.GetBytes(json);
         Assert(PayloadParser.TryParse(body, out var payload), $"{name} should parse on legacy path");
 
-        Span<short> legacy = stackalloc short[Constants.Dim];
-        Span<short> optimized = stackalloc short[Constants.Dim];
+        Span<short> legacy = stackalloc short[Constants.PaddedDim];
+        Span<short> optimized = stackalloc short[Constants.PaddedDim];
         Vectorizer.Vectorize(payload, legacy);
         Assert(QueryBuilder.TryBuildQuery(body, optimized), $"{name} should build optimized query");
 

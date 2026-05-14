@@ -88,6 +88,11 @@ internal static class Vectorizer
         output[11] = knownMerchant ? (short)0 : (short)Constants.Scale;
         output[12] = Quantize(MccRisk(mcc));
         output[13] = Quantize(Clamp01(merchantAvgAmount / 10_000.0));
+        if (output.Length >= Constants.PaddedDim)
+        {
+            output[14] = 0;
+            output[15] = 0;
+        }
     }
 
     public static short QuantizeReference(double value)

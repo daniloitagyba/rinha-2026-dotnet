@@ -125,6 +125,8 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${BLOCK_SCAN:-}" ] || \
    [ -n "${SOCKETS_MOUNT:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
+   [ -n "${FD_RECEIVERS:-}" ] || \
+   [ -n "${FD_RAW:-}" ] || \
    [ -n "${SERVER_MODE:-}" ] || \
    [ -n "${INDEX_HUGEPAGES:-}" ] || \
    [ -n "${DOTNET_PROCESSOR_COUNT:-}" ] || \
@@ -209,6 +211,8 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${NATIVE_ANN:-}" ] && echo "      NATIVE_ANN: \"$NATIVE_ANN\""
       [ -n "${BLOCK_SCAN:-}" ] && echo "      BLOCK_SCAN: \"$BLOCK_SCAN\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
+      [ -n "${FD_RECEIVERS:-}" ] && echo "      FD_RECEIVERS: \"$FD_RECEIVERS\""
+      [ -n "${FD_RAW:-}" ] && echo "      FD_RAW: \"$FD_RAW\""
       [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""
       [ -n "${INDEX_HUGEPAGES:-}" ] && echo "      INDEX_HUGEPAGES: \"$INDEX_HUGEPAGES\""
       [ -n "${DOTNET_PROCESSOR_COUNT:-}" ] && echo "      DOTNET_PROCESSOR_COUNT: \"$DOTNET_PROCESSOR_COUNT\""

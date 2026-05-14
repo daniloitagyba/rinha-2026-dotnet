@@ -36,7 +36,7 @@ internal static class EvalCommand
         var parseErrors = 0;
         Span<int> fraudCountBuckets = stackalloc int[Constants.K + 1];
         var latencies = new List<long>(Math.Min(100_000, Math.Max(1024, limit)));
-        var queryBuffer = new short[Constants.Dim];
+        var queryBuffer = new short[Constants.PaddedDim];
         var started = Stopwatch.StartNew();
 
         while (total < limit)

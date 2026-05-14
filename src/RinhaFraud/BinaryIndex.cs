@@ -303,6 +303,16 @@ internal unsafe sealed class BinaryIndex : IDisposable
             }
             else
             {
+                riskyMappedCount = 0;
+                riskyMappedFineKeyCount = 0;
+                riskyMappedVectorsOffset = 0;
+                riskyMappedLabelsOffset = 0;
+                riskyMappedBucketOffsetsOffset = 0;
+                riskyMappedFineBucketOffsetsOffset = 0;
+                riskyMappedCoarseFineOffsetsOffset = 0;
+                riskyMappedFineKeysOffset = 0;
+                riskyMappedSoaOffset = 0;
+
                 BuildRiskyFallbackIndex(
                     ptr,
                     count,

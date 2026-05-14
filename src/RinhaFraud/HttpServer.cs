@@ -273,12 +273,13 @@ internal static class HttpServer
     {
         using var listener = CreateUnixListener(controlPath);
         var receiverCount = Math.Max(1, EnvInt("FD_RECEIVERS", workerCount));
+        var rawFd = EnvBool("FD_RAW", false);
         Console.Error.WriteLine(
-            $"serving fd control on {controlPath}, receivers={receiverCount}, index={Environment.GetEnvironmentVariable("INDEX_PATH")}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, risky_fallback_refs={index.RiskyFallbackCount}");
+            $"serving fd control on {controlPath}, receivers={receiverCount}, raw_fd={rawFd}, index={Environment.GetEnvironmentVariable("INDEX_PATH")}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, risky_fallback_refs={index.RiskyFallbackCount}");
 
         for (var i = 0; i < receiverCount; i++)
         {
-            var thread = new Thread(() => AcceptFdControlLoop(listener, index, searchParams, keepAliveRequests, keepAliveIdleMs))
+            var thread = new Thread(() => AcceptFdControlLoop(listener, index, searchParams, keepAliveRequests, keepAliveIdleMs, rawFd))
             {
                 IsBackground = false,
                 Name = $"rinha-fd-receiver-{i}"
@@ -289,7 +290,7 @@ internal static class HttpServer
         Thread.Sleep(Timeout.Infinite);
     }
 
-    private static void AcceptFdControlLoop(Socket listener, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs)
+    private static void AcceptFdControlLoop(Socket listener, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs, bool rawFd)
     {
         while (true)
         {
@@ -298,7 +299,7 @@ internal static class HttpServer
             {
                 control = listener.Accept();
                 var acceptedControl = control;
-                var thread = new Thread(() => ReceiveFdLoop(acceptedControl, index, searchParams, keepAliveRequests, keepAliveIdleMs))
+                var thread = new Thread(() => ReceiveFdLoop(acceptedControl, index, searchParams, keepAliveRequests, keepAliveIdleMs, rawFd))
                 {
                     IsBackground = true,
                     Name = "rinha-fd-control"
@@ -323,7 +324,7 @@ internal static class HttpServer
         }
     }
 
-    private static void ReceiveFdLoop(Socket control, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs)
+    private static void ReceiveFdLoop(Socket control, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs, bool rawFd)
     {
         using var acceptedControl = control;
         while (true)
@@ -332,6 +333,18 @@ internal static class HttpServer
             if (fd < 0)
             {
                 return;
+            }
+
+            if (rawFd)
+            {
+                ThreadPool.UnsafeQueueUserWorkItem(
+                    static (FdConnectionWork work) =>
+                    {
+                        HandleConnection(work.Fd, work.Index, work.SearchParams, work.KeepAliveRequests);
+                    },
+                    new FdConnectionWork(fd, index, searchParams, keepAliveRequests),
+                    preferLocal: false);
+                continue;
             }
 
             Socket? socket = null;
@@ -429,6 +442,51 @@ internal static class HttpServer
         }
     }
 
+    private static void HandleConnection(int fd, BinaryIndex index, SearchParams searchParams, int keepAliveRequests)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(Constants.MaxRequestBytes);
+        try
+        {
+            var used = 0;
+            var handled = 0;
+            while (true)
+            {
+                int headerEnd;
+                int contentLength;
+                while (!RequestComplete(buffer.AsSpan(0, used), out headerEnd, out contentLength))
+                {
+                    if (used >= buffer.Length)
+                    {
+                        Send(fd, DefaultResponse);
+                        return;
+                    }
+
+                    var read = Receive(fd, buffer.AsSpan(used, buffer.Length - used));
+                    if (read <= 0)
+                    {
+                        return;
+                    }
+
+                    used += read;
+                }
+
+                Send(fd, SelectResponse(buffer, used, headerEnd, contentLength, index, searchParams).Span);
+                handled++;
+                if (keepAliveRequests > 0 && handled >= keepAliveRequests)
+                {
+                    return;
+                }
+
+                used = 0;
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+            CloseFd(fd);
+        }
+    }
+
     private readonly struct ConnectionWork
     {
         public ConnectionWork(Socket socket, BinaryIndex index, SearchParams searchParams, int keepAliveRequests)
@@ -440,6 +498,25 @@ internal static class HttpServer
         }
 
         public Socket Socket { get; }
+
+        public BinaryIndex Index { get; }
+
+        public SearchParams SearchParams { get; }
+
+        public int KeepAliveRequests { get; }
+    }
+
+    private readonly struct FdConnectionWork
+    {
+        public FdConnectionWork(int fd, BinaryIndex index, SearchParams searchParams, int keepAliveRequests)
+        {
+            Fd = fd;
+            Index = index;
+            SearchParams = searchParams;
+            KeepAliveRequests = keepAliveRequests;
+        }
+
+        public int Fd { get; }
 
         public BinaryIndex Index { get; }
 
@@ -472,7 +549,7 @@ internal static class HttpServer
         {
             var bodyStart = headerEnd + 4;
             var body = request.Slice(bodyStart, contentLength);
-            Span<short> query = stackalloc short[Constants.Dim];
+            Span<short> query = stackalloc short[Constants.PaddedDim];
             if (!QueryBuilder.TryBuildQuery(body, query))
             {
                 Send(socket, DefaultResponse);
@@ -608,7 +685,7 @@ internal static class HttpServer
         {
             var bodyStart = headerEnd + 4;
             var body = request.Slice(bodyStart, contentLength);
-            Span<short> query = stackalloc short[Constants.Dim];
+            Span<short> query = stackalloc short[Constants.PaddedDim];
             if (!QueryBuilder.TryBuildQuery(body, query))
             {
                 return DefaultResponseBytes;
@@ -655,6 +732,52 @@ internal static class HttpServer
             }
 
             response = response[sent..];
+        }
+    }
+
+    private static unsafe int Receive(int fd, Span<byte> buffer)
+    {
+        fixed (byte* ptr = buffer)
+        {
+            while (true)
+            {
+                var received = recv(fd, ptr, (nuint)buffer.Length, 0);
+                if (received >= 0)
+                {
+                    return (int)received;
+                }
+
+                if (Marshal.GetLastPInvokeError() == Eintr)
+                {
+                    continue;
+                }
+
+                return -1;
+            }
+        }
+    }
+
+    private static unsafe void Send(int fd, ReadOnlySpan<byte> response)
+    {
+        fixed (byte* ptr = response)
+        {
+            var offset = 0;
+            while (offset < response.Length)
+            {
+                var sent = send(fd, ptr + offset, (nuint)(response.Length - offset), MsgNoSignal);
+                if (sent > 0)
+                {
+                    offset += (int)sent;
+                    continue;
+                }
+
+                if (sent < 0 && Marshal.GetLastPInvokeError() == Eintr)
+                {
+                    continue;
+                }
+
+                return;
+            }
         }
     }
 
@@ -829,6 +952,8 @@ internal static class HttpServer
 
     private const int SolSocket = 1;
     private const int ScmRights = 1;
+    private const int Eintr = 4;
+    private const int MsgNoSignal = 0x4000;
 
     [StructLayout(LayoutKind.Sequential)]
     private unsafe struct IOVec
@@ -851,6 +976,12 @@ internal static class HttpServer
 
     [DllImport("libc", SetLastError = true)]
     private static extern unsafe nint recvmsg(int sockfd, MsgHdr* msg, int flags);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern unsafe nint recv(int sockfd, void* buffer, nuint length, int flags);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern unsafe nint send(int sockfd, void* buffer, nuint length, int flags);
 
     [DllImport("libc", SetLastError = true)]
     private static extern int close(int fd);

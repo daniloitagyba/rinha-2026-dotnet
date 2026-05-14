@@ -33,6 +33,7 @@ param(
     [string]$BlockScan = $env:BLOCK_SCAN,
     [string]$SocketsMount = $env:SOCKETS_MOUNT,
     [string]$Workers = $env:WORKERS,
+    [string]$FdRaw = $env:FD_RAW,
     [string]$ServerMode = $env:SERVER_MODE,
     [string]$IndexHugePages = $env:INDEX_HUGEPAGES,
     [string]$DotnetProcessorCount = $env:DOTNET_PROCESSOR_COUNT,
@@ -147,6 +148,7 @@ $apiOverrides = [ordered]@{
     "NATIVE_ANN" = $NativeAnn
     "BLOCK_SCAN" = $BlockScan
     "WORKERS" = $Workers
+    "FD_RAW" = $FdRaw
     "SERVER_MODE" = $ServerMode
     "INDEX_HUGEPAGES" = $IndexHugePages
     "DOTNET_PROCESSOR_COUNT" = $DotnetProcessorCount

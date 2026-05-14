@@ -169,6 +169,66 @@ int32_t rinha_consider_ann_avx2(
 }
 
 __attribute__((visibility("default")))
+int32_t rinha_classify_ann_avx2(
+    const int16_t *vectors,
+    const uint8_t *labels,
+    const int32_t *bucket_offsets,
+    const uint16_t *neighbor_keys,
+    const int16_t *query,
+    int32_t early_candidates,
+    int32_t min_candidates,
+    int32_t max_candidates,
+    int32_t early_edge_fallback) {
+    int64_t top_dist[K] = {
+        INT64_MAX,
+        INT64_MAX,
+        INT64_MAX,
+        INT64_MAX,
+        INT64_MAX
+    };
+    uint8_t top_label[K] = {0, 0, 0, 0, 0};
+    int32_t candidates = 0;
+
+    for (int neighbor_index = 0; neighbor_index < BUCKET_COUNT; neighbor_index++) {
+        int key = neighbor_keys[neighbor_index];
+        int start = bucket_offsets[key];
+        int end = bucket_offsets[key + 1];
+        int scan_end = end;
+        int remaining = max_candidates - candidates;
+        if (end - start > remaining) {
+            scan_end = start + remaining;
+        }
+
+        for (int id = start; id < scan_end; id++) {
+            int64_t dist = distance_mapped_avx2(vectors + ((int64_t)id * DIM), query);
+            if (dist < top_dist[K - 1]) {
+                insert_candidate(dist, labels[id], top_dist, top_label);
+            }
+        }
+
+        candidates += scan_end - start;
+        if (candidates >= max_candidates) {
+            break;
+        }
+
+        if (candidates >= early_candidates && strong_decision(top_label, early_edge_fallback)) {
+            break;
+        }
+
+        if (candidates >= min_candidates) {
+            break;
+        }
+    }
+
+    int frauds = (int)top_label[0] +
+                 (int)top_label[1] +
+                 (int)top_label[2] +
+                 (int)top_label[3] +
+                 (int)top_label[4];
+    return (candidates << 3) | frauds;
+}
+
+__attribute__((visibility("default")))
 int32_t rinha_consider_risky_fine_avx2(
     const int16_t *vectors,
     const uint8_t *labels,

@@ -30,6 +30,7 @@ param(
     [string]$RiskySimd = $env:RISKY_SIMD,
     [string]$RiskyNativeFine = $env:RISKY_NATIVE_FINE,
     [string]$NativeAnn = $env:NATIVE_ANN,
+    [string]$NativeAnnDirect = $env:NATIVE_ANN_DIRECT,
     [string]$BlockScan = $env:BLOCK_SCAN,
     [string]$SocketsMount = $env:SOCKETS_MOUNT,
     [string]$Workers = $env:WORKERS,
@@ -146,6 +147,7 @@ $apiOverrides = [ordered]@{
     "RISKY_SIMD" = $RiskySimd
     "RISKY_NATIVE_FINE" = $RiskyNativeFine
     "NATIVE_ANN" = $NativeAnn
+    "NATIVE_ANN_DIRECT" = $NativeAnnDirect
     "BLOCK_SCAN" = $BlockScan
     "WORKERS" = $Workers
     "FD_RAW" = $FdRaw

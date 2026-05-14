@@ -122,6 +122,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${RISKY_SIMD:-}" ] || \
    [ -n "${RISKY_NATIVE_FINE:-}" ] || \
    [ -n "${NATIVE_ANN:-}" ] || \
+   [ -n "${NATIVE_ANN_DIRECT:-}" ] || \
    [ -n "${BLOCK_SCAN:-}" ] || \
    [ -n "${SOCKETS_MOUNT:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
@@ -209,6 +210,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${RISKY_SIMD:-}" ] && echo "      RISKY_SIMD: \"$RISKY_SIMD\""
       [ -n "${RISKY_NATIVE_FINE:-}" ] && echo "      RISKY_NATIVE_FINE: \"$RISKY_NATIVE_FINE\""
       [ -n "${NATIVE_ANN:-}" ] && echo "      NATIVE_ANN: \"$NATIVE_ANN\""
+      [ -n "${NATIVE_ANN_DIRECT:-}" ] && echo "      NATIVE_ANN_DIRECT: \"$NATIVE_ANN_DIRECT\""
       [ -n "${BLOCK_SCAN:-}" ] && echo "      BLOCK_SCAN: \"$BLOCK_SCAN\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
       [ -n "${FD_RECEIVERS:-}" ] && echo "      FD_RECEIVERS: \"$FD_RECEIVERS\""

@@ -78,6 +78,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly bool _useRiskySoa;
     private readonly bool _useRiskyNativeFine;
     private readonly bool _useNativeAnn;
+    private readonly bool _useNativeAnnDirect;
     private readonly bool _useIvfOrder;
     private readonly bool _useMappedSimd;
     private readonly bool _useBlockScan;
@@ -124,6 +125,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         bool useRiskySoa,
         bool useRiskyNativeFine,
         bool useNativeAnn,
+        bool useNativeAnnDirect,
         bool useIvfOrder,
         bool useMappedSimd,
         bool useBlockScan)
@@ -166,6 +168,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _useRiskySoa = useRiskySoa;
         _useRiskyNativeFine = useRiskyNativeFine;
         _useNativeAnn = useNativeAnn;
+        _useNativeAnnDirect = useNativeAnnDirect;
         _useIvfOrder = useIvfOrder;
         _useMappedSimd = useMappedSimd;
         _useBlockScan = useBlockScan && blockVectorsOffset != 0;
@@ -239,6 +242,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var useRiskySoa = EnvBool("RISKY_SOA", false);
             var useRiskyNativeFine = EnvBool("RISKY_NATIVE_FINE", false);
             var useNativeAnn = EnvBool("NATIVE_ANN", false);
+            var useNativeAnnDirect = EnvBool("NATIVE_ANN_DIRECT", false);
             var useIvfOrder = EnvBool("IVF_ORDER", false);
             var useMappedSimd = EnvBool("MAPPED_SIMD", true);
             var useBlockScan = EnvBool("BLOCK_SCAN", false);
@@ -388,6 +392,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 useRiskySoa,
                 useRiskyNativeFine,
                 useNativeAnn,
+                useNativeAnnDirect,
                 useIvfOrder,
                 useMappedSimd,
                 useBlockScan);
@@ -504,6 +509,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
             return ClassifyFlat(query);
         }
 
+        if (_useNativeAnnDirect && _useNativeAnn && _useMappedSimd && Avx2.IsSupported)
+        {
+            return ClassifyFraudCountNativeAnnDirect(query, searchParams);
+        }
+
         Span<long> topDist = stackalloc long[Constants.K];
         Span<byte> topLabel = stackalloc byte[Constants.K];
         topDist.Fill(long.MaxValue);
@@ -515,6 +525,27 @@ internal unsafe sealed class BinaryIndex : IDisposable
         }
 
         var frauds = CountFrauds(topLabel);
+        if (!ShouldUseExactFallback(query, frauds, searchParams))
+        {
+            return frauds;
+        }
+
+        return searchParams.ExactFallback == SearchParams.ExactFallbackRisky
+            ? ClassifyRiskyFlat(query, allowFullTiebreak: true)
+            : ClassifyFlat(query);
+    }
+
+    [SkipLocalsInit]
+    private int ClassifyFraudCountNativeAnnDirect(ReadOnlySpan<short> query, in SearchParams searchParams)
+    {
+        var packed = ClassifyNativeAnn(query, searchParams);
+        var candidates = packed >> 3;
+        var frauds = packed & 7;
+        if (candidates < Constants.K)
+        {
+            return ClassifyFlat(query);
+        }
+
         if (!ShouldUseExactFallback(query, frauds, searchParams))
         {
             return frauds;
@@ -697,6 +728,30 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 searchParams.EarlyEdgeFallback ? 1 : 0,
                 topDistPtr,
                 topLabelPtr);
+        }
+    }
+
+    [SkipLocalsInit]
+    private int ClassifyNativeAnn(ReadOnlySpan<short> query, in SearchParams searchParams)
+    {
+        Span<short> paddedQuery = stackalloc short[RiskyVectorStride];
+        paddedQuery.Clear();
+        query.CopyTo(paddedQuery);
+
+        var neighborKeys = NeighborKeyOrderFor(query);
+        fixed (short* queryPtr = paddedQuery)
+        fixed (ushort* neighborKeysPtr = neighborKeys)
+        {
+            return NativeClassifyAnnAvx2(
+                (short*)(_ptr + _vectorsOffset),
+                _ptr + _labelsOffset,
+                (int*)(_ptr + _bucketOffsetsOffset),
+                neighborKeysPtr,
+                queryPtr,
+                searchParams.EarlyCandidates,
+                searchParams.MinCandidates,
+                searchParams.MaxCandidates,
+                searchParams.EarlyEdgeFallback ? 1 : 0);
         }
     }
 
@@ -2430,6 +2485,18 @@ internal unsafe sealed class BinaryIndex : IDisposable
         int earlyEdgeFallback,
         long* topDist,
         byte* topLabel);
+
+    [DllImport("rinha_native", EntryPoint = "rinha_classify_ann_avx2")]
+    private static extern int NativeClassifyAnnAvx2(
+        short* vectors,
+        byte* labels,
+        int* bucketOffsets,
+        ushort* neighborKeys,
+        short* query,
+        int earlyCandidates,
+        int minCandidates,
+        int maxCandidates,
+        int earlyEdgeFallback);
 
     [DllImport("rinha_native", EntryPoint = "rinha_consider_risky_fine_avx2")]
     private static extern int NativeConsiderRiskyFineAvx2(

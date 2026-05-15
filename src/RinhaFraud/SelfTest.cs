@@ -72,6 +72,9 @@ internal static class SelfTest
                 profileMinCount: 20,
                 profileLegitMinCount: 20,
                 profileFraudMinCount: 20,
+                profileDominantFastPath: false,
+                profileDominantMinCount: 20,
+                profileDominantMaxOpposite: 0,
                 exactFallback: SearchParams.ExactFallbackOff,
                 earlyEdgeFallback: false);
 

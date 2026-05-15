@@ -17,6 +17,9 @@ internal readonly struct SearchParams
     public readonly int ProfileMinCount;
     public readonly int ProfileLegitMinCount;
     public readonly int ProfileFraudMinCount;
+    public readonly bool ProfileDominantFastPath;
+    public readonly int ProfileDominantMinCount;
+    public readonly int ProfileDominantMaxOpposite;
     public readonly int ExactFallback;
     public readonly bool EarlyEdgeFallback;
 
@@ -29,6 +32,9 @@ internal readonly struct SearchParams
         int profileMinCount,
         int profileLegitMinCount,
         int profileFraudMinCount,
+        bool profileDominantFastPath,
+        int profileDominantMinCount,
+        int profileDominantMaxOpposite,
         int exactFallback,
         bool earlyEdgeFallback)
     {
@@ -40,6 +46,9 @@ internal readonly struct SearchParams
         ProfileMinCount = Math.Max(1, profileMinCount);
         ProfileLegitMinCount = Math.Max(1, profileLegitMinCount);
         ProfileFraudMinCount = Math.Max(1, profileFraudMinCount);
+        ProfileDominantFastPath = profileDominantFastPath;
+        ProfileDominantMinCount = Math.Max(1, profileDominantMinCount);
+        ProfileDominantMaxOpposite = Math.Max(0, profileDominantMaxOpposite);
         ExactFallback = Math.Clamp(exactFallback, ExactFallbackOff, ExactFallbackProfileMiss);
         EarlyEdgeFallback = earlyEdgeFallback;
     }
@@ -59,6 +68,9 @@ internal readonly struct SearchParams
             profileMinCount,
             EnvInt("PROFILE_LEGIT_MIN_COUNT", profileMinCount),
             EnvInt("PROFILE_FRAUD_MIN_COUNT", profileMinCount),
+            EnvBool("PROFILE_DOMINANT_FASTPATH", false),
+            EnvInt("PROFILE_DOMINANT_MIN_COUNT", 15),
+            EnvInt("PROFILE_DOMINANT_MAX_OPPOSITE", 2),
             ExactFallbackMode(Environment.GetEnvironmentVariable("EXACT_FALLBACK")),
             EnvBool("EARLY_EDGE_FALLBACK", false));
     }

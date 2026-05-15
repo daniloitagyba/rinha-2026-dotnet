@@ -157,7 +157,7 @@ internal static class EvalCommand
         Console.WriteLine($"index={indexPath}");
         Console.WriteLine($"risky_fallback_refs={index.RiskyFallbackCount}");
         Console.WriteLine(
-            $"params early_candidates={searchParams.EarlyCandidates} min_candidates={searchParams.MinCandidates} max_candidates={searchParams.MaxCandidates} flat={searchParams.Flat} profile_fastpath={searchParams.ProfileFastPath} profile_min_count={searchParams.ProfileMinCount} profile_legit_min_count={searchParams.ProfileLegitMinCount} profile_fraud_min_count={searchParams.ProfileFraudMinCount} exact_fallback={searchParams.ExactFallback}");
+            $"params early_candidates={searchParams.EarlyCandidates} min_candidates={searchParams.MinCandidates} max_candidates={searchParams.MaxCandidates} flat={searchParams.Flat} profile_fastpath={searchParams.ProfileFastPath} profile_min_count={searchParams.ProfileMinCount} profile_legit_min_count={searchParams.ProfileLegitMinCount} profile_fraud_min_count={searchParams.ProfileFraudMinCount} profile_dominant_fastpath={searchParams.ProfileDominantFastPath} profile_dominant_min_count={searchParams.ProfileDominantMinCount} profile_dominant_max_opposite={searchParams.ProfileDominantMaxOpposite} exact_fallback={searchParams.ExactFallback}");
         Console.WriteLine($"total={total} measured={measured} correct={correct} accuracy={accuracy:F6}");
         Console.WriteLine($"fp={fp} fn={fn} parse_errors={parseErrors} weighted_errors={weightedErrors} failure_rate={failureRate:F6} score_det={detectionScore:F2}");
         Console.WriteLine($"elapsed_ms={started.ElapsedMilliseconds} throughput_per_s={throughput:F1}");

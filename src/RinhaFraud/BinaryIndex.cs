@@ -39,6 +39,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private const uint SectionRiskySoa = 11;
     private const uint SectionIvfOrders = 12;
     private const uint SectionBlockVectors = 13;
+    private const uint SectionProfileFraudCounts = 14;
 
     private readonly MemoryMappedFile _mappedFile;
     private readonly MemoryMappedViewAccessor _accessor;
@@ -50,7 +51,9 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly long _bucketOffsetsOffset;
     private readonly long _profileCountsOffset;
     private readonly long _profileLabelMasksOffset;
+    private readonly long _profileFraudCountsOffset;
     private readonly ushort[] _profileCounts;
+    private readonly ushort[] _profileFraudCounts;
     private readonly byte[] _profileLabelMasks;
     private readonly uint[] _riskyFallbackIds;
     private readonly short[] _riskyFallbackVectors;
@@ -97,7 +100,9 @@ internal unsafe sealed class BinaryIndex : IDisposable
         long bucketOffsetsOffset,
         long profileCountsOffset,
         long profileLabelMasksOffset,
+        long profileFraudCountsOffset,
         ushort[] profileCounts,
+        ushort[] profileFraudCounts,
         byte[] profileLabelMasks,
         uint[] riskyFallbackIds,
         short[] riskyFallbackVectors,
@@ -140,7 +145,9 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _bucketOffsetsOffset = bucketOffsetsOffset;
         _profileCountsOffset = profileCountsOffset;
         _profileLabelMasksOffset = profileLabelMasksOffset;
+        _profileFraudCountsOffset = profileFraudCountsOffset;
         _profileCounts = profileCounts;
+        _profileFraudCounts = profileFraudCounts;
         _profileLabelMasks = profileLabelMasks;
         _riskyFallbackIds = riskyFallbackIds;
         _riskyFallbackVectors = riskyFallbackVectors;
@@ -251,19 +258,23 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 : default;
 
             ushort[] profileCounts;
+            ushort[] profileFraudCounts;
             byte[] profileLabelMasks;
             var profileCountsOffset = ValidSection(sections.ProfileCountsOffset, sections.ProfileCountsLength, ProfileKeyCount * 2L) ? sections.ProfileCountsOffset : 0;
             var profileLabelMasksOffset = ValidSection(sections.ProfileMasksOffset, sections.ProfileMasksLength, ProfileKeyCount) ? sections.ProfileMasksOffset : 0;
-            if (profileCountsOffset != 0 && profileLabelMasksOffset != 0)
+            var profileFraudCountsOffset = ValidSection(sections.ProfileFraudCountsOffset, sections.ProfileFraudCountsLength, ProfileKeyCount * 2L) ? sections.ProfileFraudCountsOffset : 0;
+            if (profileCountsOffset != 0 && profileLabelMasksOffset != 0 && profileFraudCountsOffset != 0)
             {
                 profileCounts = Array.Empty<ushort>();
+                profileFraudCounts = Array.Empty<ushort>();
                 profileLabelMasks = Array.Empty<byte>();
             }
             else
             {
                 profileCountsOffset = 0;
                 profileLabelMasksOffset = 0;
-                BuildProfileStats(ptr, count, vectorsOffset, labelsOffset, out profileCounts, out profileLabelMasks);
+                profileFraudCountsOffset = 0;
+                BuildProfileStats(ptr, count, vectorsOffset, labelsOffset, out profileCounts, out profileFraudCounts, out profileLabelMasks);
             }
 
             uint[] riskyFallbackIds;
@@ -364,7 +375,9 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 bucketOffsetsOffset,
                 profileCountsOffset,
                 profileLabelMasksOffset,
+                profileFraudCountsOffset,
                 profileCounts,
+                profileFraudCounts,
                 profileLabelMasks,
                 riskyFallbackIds,
                 riskyFallbackVectors,
@@ -429,6 +442,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
         if (_profileLabelMasksOffset != 0)
         {
             checksum ^= PrefaultRange(_profileLabelMasksOffset, ProfileKeyCount);
+        }
+
+        if (_profileFraudCountsOffset != 0)
+        {
+            checksum ^= PrefaultRange(_profileFraudCountsOffset, ProfileKeyCount * 2L);
         }
 
         if (_useIvfOrder && _ivfOrdersOffset != 0)
@@ -1520,9 +1538,10 @@ internal unsafe sealed class BinaryIndex : IDisposable
 
         var key = ProfileKey(query);
         var mask = ProfileLabelMask(key);
+        var profileCount = ProfileCount(key);
         if (mask == LegitMask)
         {
-            if (ProfileCount(key) < searchParams.ProfileLegitMinCount)
+            if (profileCount < searchParams.ProfileLegitMinCount)
             {
                 return false;
             }
@@ -1533,13 +1552,32 @@ internal unsafe sealed class BinaryIndex : IDisposable
 
         if (mask == FraudMask)
         {
-            if (ProfileCount(key) < searchParams.ProfileFraudMinCount)
+            if (profileCount < searchParams.ProfileFraudMinCount)
             {
                 return false;
             }
 
             fraudCount = Constants.K;
             return true;
+        }
+
+        if (searchParams.ProfileDominantFastPath)
+        {
+            var profileFrauds = ProfileFraudCount(key);
+            var profileLegits = Math.Max(0, profileCount - profileFrauds);
+            if (profileFrauds >= searchParams.ProfileDominantMinCount &&
+                profileLegits <= searchParams.ProfileDominantMaxOpposite)
+            {
+                fraudCount = Constants.K;
+                return true;
+            }
+
+            if (profileLegits >= searchParams.ProfileDominantMinCount &&
+                profileFrauds <= searchParams.ProfileDominantMaxOpposite)
+            {
+                fraudCount = 0;
+                return true;
+            }
         }
 
         return false;
@@ -1958,6 +1996,14 @@ internal unsafe sealed class BinaryIndex : IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private ushort ProfileFraudCount(int key)
+    {
+        return _profileFraudCountsOffset != 0
+            ? Unsafe.ReadUnaligned<ushort>(_ptr + _profileFraudCountsOffset + key * 2L)
+            : _profileFraudCounts[key];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private byte ProfileLabelMask(int key)
     {
         return _profileLabelMasksOffset != 0
@@ -2109,6 +2155,10 @@ internal unsafe sealed class BinaryIndex : IDisposable
                     sections.BlockVectorsOffset = offset;
                     sections.BlockVectorsLength = length;
                     break;
+                case SectionProfileFraudCounts:
+                    sections.ProfileFraudCountsOffset = offset;
+                    sections.ProfileFraudCountsLength = length;
+                    break;
             }
         }
 
@@ -2203,9 +2253,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
         long vectorsOffset,
         long labelsOffset,
         out ushort[] profileCounts,
+        out ushort[] profileFraudCounts,
         out byte[] profileLabelMasks)
     {
         profileCounts = new ushort[ProfileKeyCount];
+        profileFraudCounts = new ushort[ProfileKeyCount];
         profileLabelMasks = new byte[ProfileKeyCount];
 
         for (uint id = 0; id < count; id++)
@@ -2218,7 +2270,19 @@ internal unsafe sealed class BinaryIndex : IDisposable
             }
 
             var label = *(ptr + labelsOffset + id);
-            profileLabelMasks[key] |= label == 1 ? FraudMask : LegitMask;
+            if (label == 1)
+            {
+                if (profileFraudCounts[key] < ushort.MaxValue)
+                {
+                    profileFraudCounts[key]++;
+                }
+
+                profileLabelMasks[key] |= FraudMask;
+            }
+            else
+            {
+                profileLabelMasks[key] |= LegitMask;
+            }
         }
     }
 
@@ -2439,6 +2503,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
         public long ProfileCountsLength;
         public long ProfileMasksOffset;
         public long ProfileMasksLength;
+        public long ProfileFraudCountsOffset;
+        public long ProfileFraudCountsLength;
         public long NeighborOrdersOffset;
         public long NeighborOrdersLength;
         public long RiskyMetaOffset;

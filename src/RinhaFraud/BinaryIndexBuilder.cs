@@ -33,6 +33,7 @@ internal static class BinaryIndexBuilder
     private const uint SectionRiskySoa = 11;
     private const uint SectionIvfOrders = 12;
     private const uint SectionBlockVectors = 13;
+    private const uint SectionProfileFraudCounts = 14;
 
     public static void Build(string outputPath, Stream input)
     {
@@ -193,6 +194,7 @@ internal static class BinaryIndexBuilder
         List<SectionEntry> sections)
     {
         var profileCounts = new ushort[ProfileKeyCount];
+        var profileFraudCounts = new ushort[ProfileKeyCount];
         var profileMasks = new byte[ProfileKeyCount];
 
         for (var mappedId = 0; mappedId < orderedOriginalIds.Length; mappedId++)
@@ -205,11 +207,24 @@ internal static class BinaryIndexBuilder
                 profileCounts[key]++;
             }
 
-            profileMasks[key] |= labels[originalId] == 1 ? (byte)2 : (byte)1;
+            if (labels[originalId] == 1)
+            {
+                if (profileFraudCounts[key] < ushort.MaxValue)
+                {
+                    profileFraudCounts[key]++;
+                }
+
+                profileMasks[key] |= 2;
+            }
+            else
+            {
+                profileMasks[key] |= 1;
+            }
         }
 
         WriteSection(output, SectionProfileCounts, MemoryMarshal.AsBytes(profileCounts.AsSpan()), sections);
         WriteSection(output, SectionProfileMasks, profileMasks, sections);
+        WriteSection(output, SectionProfileFraudCounts, MemoryMarshal.AsBytes(profileFraudCounts.AsSpan()), sections);
     }
 
     private static void WriteNeighborOrdersSection(FileStream output, List<SectionEntry> sections)

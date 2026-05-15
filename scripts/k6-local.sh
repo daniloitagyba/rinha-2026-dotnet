@@ -104,6 +104,9 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${PROFILE_MIN_COUNT:-}" ] || \
    [ -n "${PROFILE_LEGIT_MIN_COUNT:-}" ] || \
    [ -n "${PROFILE_FRAUD_MIN_COUNT:-}" ] || \
+   [ -n "${PROFILE_DOMINANT_FASTPATH:-}" ] || \
+   [ -n "${PROFILE_DOMINANT_MIN_COUNT:-}" ] || \
+   [ -n "${PROFILE_DOMINANT_MAX_OPPOSITE:-}" ] || \
    [ -n "${EXACT_FALLBACK:-}" ] || \
    [ -n "${EARLY_EDGE_FALLBACK:-}" ] || \
    [ -n "${RISKY_AMOUNT_MIN:-}" ] || \
@@ -192,6 +195,9 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${PROFILE_MIN_COUNT:-}" ] && echo "      PROFILE_MIN_COUNT: \"$PROFILE_MIN_COUNT\""
       [ -n "${PROFILE_LEGIT_MIN_COUNT:-}" ] && echo "      PROFILE_LEGIT_MIN_COUNT: \"$PROFILE_LEGIT_MIN_COUNT\""
       [ -n "${PROFILE_FRAUD_MIN_COUNT:-}" ] && echo "      PROFILE_FRAUD_MIN_COUNT: \"$PROFILE_FRAUD_MIN_COUNT\""
+      [ -n "${PROFILE_DOMINANT_FASTPATH:-}" ] && echo "      PROFILE_DOMINANT_FASTPATH: \"$PROFILE_DOMINANT_FASTPATH\""
+      [ -n "${PROFILE_DOMINANT_MIN_COUNT:-}" ] && echo "      PROFILE_DOMINANT_MIN_COUNT: \"$PROFILE_DOMINANT_MIN_COUNT\""
+      [ -n "${PROFILE_DOMINANT_MAX_OPPOSITE:-}" ] && echo "      PROFILE_DOMINANT_MAX_OPPOSITE: \"$PROFILE_DOMINANT_MAX_OPPOSITE\""
       [ -n "${EXACT_FALLBACK:-}" ] && echo "      EXACT_FALLBACK: \"$EXACT_FALLBACK\""
       [ -n "${EARLY_EDGE_FALLBACK:-}" ] && echo "      EARLY_EDGE_FALLBACK: \"$EARLY_EDGE_FALLBACK\""
       [ -n "${RISKY_AMOUNT_MIN:-}" ] && echo "      RISKY_AMOUNT_MIN: \"$RISKY_AMOUNT_MIN\""

@@ -36,7 +36,7 @@ services:
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
       MIN_CANDIDATES: "9800"
-      MAX_CANDIDATES: "10400"
+      MAX_CANDIDATES: "11000"
       PROFILE_FASTPATH: "1"
       PROFILE_MIN_COUNT: "15"
       PROFILE_LEGIT_MIN_COUNT: "5"
@@ -55,8 +55,6 @@ services:
       RISKY_MERCHANT_AVG_MAX: "420"
       RISKY_NATIVE_FINE: "1"
       NATIVE_ANN: "1"
-      NATIVE_ANN_DIRECT: "1"
-      FD_RAW: "1"
     volumes:
       - backend-sockets:/sockets
     security_opt:
@@ -83,7 +81,7 @@ services:
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
       MIN_CANDIDATES: "9800"
-      MAX_CANDIDATES: "10400"
+      MAX_CANDIDATES: "11000"
       PROFILE_FASTPATH: "1"
       PROFILE_MIN_COUNT: "15"
       PROFILE_LEGIT_MIN_COUNT: "5"
@@ -102,8 +100,6 @@ services:
       RISKY_MERCHANT_AVG_MAX: "420"
       RISKY_NATIVE_FINE: "1"
       NATIVE_ANN: "1"
-      NATIVE_ANN_DIRECT: "1"
-      FD_RAW: "1"
     volumes:
       - backend-sockets:/sockets
     security_opt:

@@ -32,6 +32,7 @@ services:
       INDEX_PATH: /app/data/references.idx
       INDEX_HUGEPAGES: "1"
       SERVER_MODE: raw
+      FD_RAW: "1"
       TP_MIN_THREADS: "64"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
@@ -80,6 +81,7 @@ services:
       INDEX_PATH: /app/data/references.idx
       INDEX_HUGEPAGES: "1"
       SERVER_MODE: raw
+      FD_RAW: "1"
       TP_MIN_THREADS: "64"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"

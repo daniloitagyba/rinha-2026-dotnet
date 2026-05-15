@@ -34,6 +34,7 @@ services:
       SERVER_MODE: raw
       TP_MIN_THREADS: "64"
       WORKERS: "2"
+      FD_RECEIVERS: "4"
       EARLY_CANDIDATES: "9800"
       MIN_CANDIDATES: "9800"
       MAX_CANDIDATES: "11000"
@@ -79,6 +80,7 @@ services:
       SERVER_MODE: raw
       TP_MIN_THREADS: "64"
       WORKERS: "2"
+      FD_RECEIVERS: "4"
       EARLY_CANDIDATES: "9800"
       MIN_CANDIDATES: "9800"
       MAX_CANDIDATES: "11000"

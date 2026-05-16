@@ -2,6 +2,7 @@ namespace RinhaFraud;
 
 using System;
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -274,12 +275,29 @@ internal static class HttpServer
         using var listener = CreateUnixListener(controlPath);
         var receiverCount = Math.Max(1, EnvInt("FD_RECEIVERS", workerCount));
         var rawFd = EnvBool("FD_RAW", false);
+        var fdWorkerPool = rawFd ? Math.Max(0, EnvInt("FD_WORKER_POOL", 0)) : 0;
+        BlockingCollection<FdConnectionWork>? fdWorkQueue = null;
+        if (fdWorkerPool > 0)
+        {
+            fdWorkQueue = new BlockingCollection<FdConnectionWork>();
+            for (var i = 0; i < fdWorkerPool; i++)
+            {
+                var queue = fdWorkQueue;
+                var worker = new Thread(() => FdWorkerLoop(queue), maxStackSize: 256 * 1024)
+                {
+                    IsBackground = false,
+                    Name = $"rinha-fd-worker-{i}"
+                };
+                worker.Start();
+            }
+        }
+
         Console.Error.WriteLine(
-            $"serving fd control on {controlPath}, receivers={receiverCount}, raw_fd={rawFd}, index={Environment.GetEnvironmentVariable("INDEX_PATH")}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, risky_fallback_refs={index.RiskyFallbackCount}");
+            $"serving fd control on {controlPath}, receivers={receiverCount}, raw_fd={rawFd}, fd_worker_pool={fdWorkerPool}, index={Environment.GetEnvironmentVariable("INDEX_PATH")}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, risky_fallback_refs={index.RiskyFallbackCount}");
 
         for (var i = 0; i < receiverCount; i++)
         {
-            var thread = new Thread(() => AcceptFdControlLoop(listener, index, searchParams, keepAliveRequests, keepAliveIdleMs, rawFd))
+            var thread = new Thread(() => AcceptFdControlLoop(listener, index, searchParams, keepAliveRequests, keepAliveIdleMs, rawFd, fdWorkQueue))
             {
                 IsBackground = false,
                 Name = $"rinha-fd-receiver-{i}"
@@ -290,7 +308,14 @@ internal static class HttpServer
         Thread.Sleep(Timeout.Infinite);
     }
 
-    private static void AcceptFdControlLoop(Socket listener, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs, bool rawFd)
+    private static void AcceptFdControlLoop(
+        Socket listener,
+        BinaryIndex index,
+        SearchParams searchParams,
+        int keepAliveRequests,
+        int keepAliveIdleMs,
+        bool rawFd,
+        BlockingCollection<FdConnectionWork>? fdWorkQueue)
     {
         while (true)
         {
@@ -299,7 +324,7 @@ internal static class HttpServer
             {
                 control = listener.Accept();
                 var acceptedControl = control;
-                var thread = new Thread(() => ReceiveFdLoop(acceptedControl, index, searchParams, keepAliveRequests, keepAliveIdleMs, rawFd))
+                var thread = new Thread(() => ReceiveFdLoop(acceptedControl, index, searchParams, keepAliveRequests, keepAliveIdleMs, rawFd, fdWorkQueue))
                 {
                     IsBackground = true,
                     Name = "rinha-fd-control"
@@ -324,7 +349,14 @@ internal static class HttpServer
         }
     }
 
-    private static void ReceiveFdLoop(Socket control, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs, bool rawFd)
+    private static void ReceiveFdLoop(
+        Socket control,
+        BinaryIndex index,
+        SearchParams searchParams,
+        int keepAliveRequests,
+        int keepAliveIdleMs,
+        bool rawFd,
+        BlockingCollection<FdConnectionWork>? fdWorkQueue)
     {
         using var acceptedControl = control;
         while (true)
@@ -337,6 +369,12 @@ internal static class HttpServer
 
             if (rawFd)
             {
+                if (fdWorkQueue is not null)
+                {
+                    fdWorkQueue.Add(new FdConnectionWork(fd, index, searchParams, keepAliveRequests));
+                    continue;
+                }
+
                 ThreadPool.UnsafeQueueUserWorkItem(
                     static (FdConnectionWork work) =>
                     {
@@ -385,6 +423,20 @@ internal static class HttpServer
                 catch
                 {
                 }
+            }
+        }
+    }
+
+    private static void FdWorkerLoop(BlockingCollection<FdConnectionWork> queue)
+    {
+        foreach (var work in queue.GetConsumingEnumerable())
+        {
+            try
+            {
+                HandleConnection(work.Fd, work.Index, work.SearchParams, work.KeepAliveRequests);
+            }
+            catch
+            {
             }
         }
     }

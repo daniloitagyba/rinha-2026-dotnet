@@ -37,7 +37,6 @@ param(
     [string]$BlockScan = $env:BLOCK_SCAN,
     [string]$SocketsMount = $env:SOCKETS_MOUNT,
     [string]$Workers = $env:WORKERS,
-    [string]$FdWorkerPool = $env:FD_WORKER_POOL,
     [string]$FdRaw = $env:FD_RAW,
     [string]$ServerMode = $env:SERVER_MODE,
     [string]$IndexHugePages = $env:INDEX_HUGEPAGES,
@@ -157,7 +156,6 @@ $apiOverrides = [ordered]@{
     "NATIVE_ANN_DIRECT" = $NativeAnnDirect
     "BLOCK_SCAN" = $BlockScan
     "WORKERS" = $Workers
-    "FD_WORKER_POOL" = $FdWorkerPool
     "FD_RAW" = $FdRaw
     "SERVER_MODE" = $ServerMode
     "INDEX_HUGEPAGES" = $IndexHugePages

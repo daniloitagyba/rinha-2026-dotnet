@@ -129,7 +129,6 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${BLOCK_SCAN:-}" ] || \
    [ -n "${SOCKETS_MOUNT:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
-   [ -n "${FD_WORKER_POOL:-}" ] || \
    [ -n "${FD_RECEIVERS:-}" ] || \
    [ -n "${FD_RAW:-}" ] || \
    [ -n "${SERVER_MODE:-}" ] || \
@@ -220,7 +219,6 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${NATIVE_ANN_DIRECT:-}" ] && echo "      NATIVE_ANN_DIRECT: \"$NATIVE_ANN_DIRECT\""
       [ -n "${BLOCK_SCAN:-}" ] && echo "      BLOCK_SCAN: \"$BLOCK_SCAN\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
-      [ -n "${FD_WORKER_POOL:-}" ] && echo "      FD_WORKER_POOL: \"$FD_WORKER_POOL\""
       [ -n "${FD_RECEIVERS:-}" ] && echo "      FD_RECEIVERS: \"$FD_RECEIVERS\""
       [ -n "${FD_RAW:-}" ] && echo "      FD_RAW: \"$FD_RAW\""
       [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""

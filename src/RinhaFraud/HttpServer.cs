@@ -585,6 +585,12 @@ internal static class HttpServer
 
     private static int ContentLength(ReadOnlySpan<byte> headers)
     {
+        var contentLength = FastContentLength(headers);
+        if (contentLength >= 0)
+        {
+            return contentLength;
+        }
+
         var pos = 0;
         while (pos < headers.Length)
         {
@@ -604,6 +610,33 @@ internal static class HttpServer
         }
 
         return 0;
+    }
+
+    private static int FastContentLength(ReadOnlySpan<byte> headers)
+    {
+        var pos = headers.IndexOf("\r\nContent-Length:"u8);
+        if (pos >= 0)
+        {
+            return ParsePositiveInt(headers[(pos + 17)..]);
+        }
+
+        pos = headers.IndexOf("\r\ncontent-length:"u8);
+        if (pos >= 0)
+        {
+            return ParsePositiveInt(headers[(pos + 17)..]);
+        }
+
+        if (headers.StartsWith("Content-Length:"u8))
+        {
+            return ParsePositiveInt(headers[15..]);
+        }
+
+        if (headers.StartsWith("content-length:"u8))
+        {
+            return ParsePositiveInt(headers[15..]);
+        }
+
+        return -1;
     }
 
     private static int ParsePositiveInt(ReadOnlySpan<byte> bytes)

@@ -40,6 +40,7 @@
 #define SECTION_RISKY_COARSE_FINE_OFFSETS 9
 #define SECTION_RISKY_FINE_KEYS 10
 #define SECTION_PROFILE_FRAUD_COUNTS 14
+#define SECTION_PROFILE_COMPACT_COUNTS 15
 
 #define LEGIT_MASK 1
 #define FRAUD_MASK 2
@@ -49,6 +50,20 @@ extern int32_t rinha_consider_ann_avx2(
     const uint8_t *labels,
     const int32_t *bucket_offsets,
     const uint16_t *neighbor_keys,
+    const int16_t *query,
+    int32_t early_candidates,
+    int32_t min_candidates,
+    int32_t max_candidates,
+    int32_t early_edge_fallback,
+    int64_t *top_dist,
+    uint8_t *top_label);
+
+extern int32_t rinha_consider_ann_avx2_limited(
+    const int16_t *vectors,
+    const uint8_t *labels,
+    const int32_t *bucket_offsets,
+    const uint16_t *neighbor_keys,
+    int32_t neighbor_count,
     const int16_t *query,
     int32_t early_candidates,
     int32_t min_candidates,
@@ -82,9 +97,11 @@ typedef struct {
     const uint8_t *labels;
     const int32_t *bucket_offsets;
     const uint16_t *neighbor_orders;
+    int neighbor_order_count;
     const uint16_t *profile_counts;
     const uint16_t *profile_fraud_counts;
     const uint8_t *profile_masks;
+    const uint8_t *profile_compact_counts;
     int risky_count;
     const int16_t *risky_vectors;
     const uint8_t *risky_labels;
@@ -161,6 +178,20 @@ static const char response_04[] = "HTTP/1.1 200 OK\r\nContent-Length:35\r\n\r\n{
 static const char response_06[] = "HTTP/1.1 200 OK\r\nContent-Length:36\r\n\r\n{\"approved\":false,\"fraud_score\":0.6}";
 static const char response_08[] = "HTTP/1.1 200 OK\r\nContent-Length:36\r\n\r\n{\"approved\":false,\"fraud_score\":0.8}";
 static const char response_10[] = "HTTP/1.1 200 OK\r\nContent-Length:36\r\n\r\n{\"approved\":false,\"fraud_score\":1.0}";
+
+typedef struct {
+    const char *data;
+    size_t len;
+} response_t;
+
+static const response_t fraud_responses[] = {
+    { response_00, sizeof(response_00) - 1 },
+    { response_02, sizeof(response_02) - 1 },
+    { response_04, sizeof(response_04) - 1 },
+    { response_06, sizeof(response_06) - 1 },
+    { response_08, sizeof(response_08) - 1 },
+    { response_10, sizeof(response_10) - 1 },
+};
 
 static inline uint32_t rd32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -265,7 +296,9 @@ static int open_index(const char *path, index_t *index) {
     uint64_t profile_counts_offset = 0;
     uint64_t profile_masks_offset = 0;
     uint64_t profile_fraud_counts_offset = 0;
+    uint64_t profile_compact_counts_offset = 0;
     uint64_t neighbor_orders_offset = 0;
+    uint64_t neighbor_orders_length = 0;
     uint64_t risky_meta_offset = 0;
     uint64_t risky_vectors_offset = 0;
     uint64_t risky_labels_offset = 0;
@@ -310,8 +343,16 @@ static int open_index(const char *path, index_t *index) {
             case SECTION_PROFILE_FRAUD_COUNTS:
                 if (length == (uint64_t)PROFILE_KEY_COUNT * 2) profile_fraud_counts_offset = offset;
                 break;
+            case SECTION_PROFILE_COMPACT_COUNTS:
+                if (length == (uint64_t)PROFILE_KEY_COUNT * 2) profile_compact_counts_offset = offset;
+                break;
             case SECTION_NEIGHBOR_ORDERS:
-                if (length == (uint64_t)BUCKET_COUNT * BUCKET_COUNT * 2) neighbor_orders_offset = offset;
+                if (length >= (uint64_t)BUCKET_COUNT * 2 &&
+                    length <= (uint64_t)BUCKET_COUNT * BUCKET_COUNT * 2 &&
+                    length % ((uint64_t)BUCKET_COUNT * 2) == 0) {
+                    neighbor_orders_offset = offset;
+                    neighbor_orders_length = length;
+                }
                 break;
             case SECTION_RISKY_META:
                 risky_meta_offset = offset;
@@ -335,9 +376,11 @@ static int open_index(const char *path, index_t *index) {
         }
     }
 
-    if (profile_counts_offset == 0 ||
-        profile_masks_offset == 0 ||
-        profile_fraud_counts_offset == 0 ||
+    int has_profile_compact = profile_compact_counts_offset != 0;
+    int has_profile_legacy = profile_counts_offset != 0 &&
+                             profile_masks_offset != 0 &&
+                             profile_fraud_counts_offset != 0;
+    if ((!has_profile_compact && !has_profile_legacy) ||
         neighbor_orders_offset == 0 ||
         risky_meta_offset == 0 ||
         risky_vectors_offset == 0 ||
@@ -361,6 +404,7 @@ static int open_index(const char *path, index_t *index) {
 
     int risky_count = (int)rd32(meta + 8);
     int fine_key_count = (int)rd32(meta + 16);
+    int neighbor_order_count = (int)(neighbor_orders_length / ((uint64_t)BUCKET_COUNT * 2));
     if (!valid_range(file_length, risky_vectors_offset, (uint64_t)risky_count * RISKY_STRIDE * 2) ||
         !valid_range(file_length, risky_labels_offset, (uint64_t)risky_count) ||
         !valid_range(file_length, risky_fine_offsets_offset, (uint64_t)(RISKY_FINE_BUCKET_COUNT + 1) * 4) ||
@@ -394,9 +438,11 @@ static int open_index(const char *path, index_t *index) {
     index->labels = base + labels_offset;
     index->bucket_offsets = (const int32_t *)(base + bucket_offsets_offset);
     index->neighbor_orders = (const uint16_t *)(base + neighbor_orders_offset);
-    index->profile_counts = (const uint16_t *)(base + profile_counts_offset);
-    index->profile_fraud_counts = (const uint16_t *)(base + profile_fraud_counts_offset);
-    index->profile_masks = base + profile_masks_offset;
+    index->neighbor_order_count = neighbor_order_count;
+    index->profile_counts = has_profile_legacy ? (const uint16_t *)(base + profile_counts_offset) : NULL;
+    index->profile_fraud_counts = has_profile_legacy ? (const uint16_t *)(base + profile_fraud_counts_offset) : NULL;
+    index->profile_masks = has_profile_legacy ? base + profile_masks_offset : NULL;
+    index->profile_compact_counts = has_profile_compact ? base + profile_compact_counts_offset : NULL;
     index->risky_count = risky_count;
     index->risky_vectors = (const int16_t *)(base + risky_vectors_offset);
     index->risky_labels = base + risky_labels_offset;
@@ -1227,6 +1273,50 @@ static inline int bucket_key(const int16_t *v) {
     return amount | (ratio << 3) | (km_home << 6) | (hour << 9) | (no_last << 11);
 }
 
+static int fill_neighbor_keys_for_key(int bucket, uint16_t *output) {
+    int amount = bucket & 7;
+    int ratio = (bucket >> 3) & 7;
+    int km_home = (bucket >> 6) & 7;
+    int hour = (bucket >> 9) & 3;
+    int no_last = (bucket >> 11) & 1;
+    uint8_t seen[BUCKET_COUNT];
+    memset(seen, 0, sizeof(seen));
+    int count = 0;
+
+    for (int radius = 0; radius < 8; radius++) {
+        int amount_start = amount - radius > 0 ? amount - radius : 0;
+        int amount_end = amount + radius < 7 ? amount + radius : 7;
+        int ratio_start = ratio - radius > 0 ? ratio - radius : 0;
+        int ratio_end = ratio + radius < 7 ? ratio + radius : 7;
+        int km_start = km_home - radius > 0 ? km_home - radius : 0;
+        int km_end = km_home + radius < 7 ? km_home + radius : 7;
+        int hour_start = hour - radius > 0 ? hour - radius : 0;
+        int hour_end = hour + radius < 3 ? hour + radius : 3;
+        int last_start = radius >= 2 ? 0 : no_last;
+        int last_end = radius >= 2 ? 1 : no_last;
+
+        for (int a = amount_start; a <= amount_end; a++) {
+            for (int r = ratio_start; r <= ratio_end; r++) {
+                for (int k = km_start; k <= km_end; k++) {
+                    for (int h = hour_start; h <= hour_end; h++) {
+                        for (int last = last_start; last <= last_end; last++) {
+                            int key = a | (r << 3) | (k << 6) | (h << 9) | (last << 11);
+                            if (seen[key] != 0) {
+                                continue;
+                            }
+
+                            seen[key] = 1;
+                            output[count++] = (uint16_t)key;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return count;
+}
+
 static inline int profile_key(const int16_t *v) {
     int key = 0;
     key |= bucket16(v[2]);
@@ -1434,6 +1524,45 @@ static int try_profile_fast_decision(const index_t *index, const settings_t *set
     }
 
     int key = profile_key(q);
+    if (index->profile_compact_counts != NULL) {
+        const uint8_t *counts = index->profile_compact_counts + key * 2;
+        int profile_legits = counts[0];
+        int profile_frauds = counts[1];
+        if (profile_frauds == 0) {
+            if (profile_legits < settings->profile_legit_min_count) {
+                return 0;
+            }
+
+            *fraud_count = 0;
+            return 1;
+        }
+
+        if (profile_legits == 0) {
+            if (profile_frauds < settings->profile_fraud_min_count) {
+                return 0;
+            }
+
+            *fraud_count = K;
+            return 1;
+        }
+
+        if (settings->profile_dominant_fastpath) {
+            if (profile_frauds >= settings->profile_dominant_min_count &&
+                profile_legits <= settings->profile_dominant_max_opposite) {
+                *fraud_count = K;
+                return 1;
+            }
+
+            if (profile_legits >= settings->profile_dominant_min_count &&
+                profile_frauds <= settings->profile_dominant_max_opposite) {
+                *fraud_count = 0;
+                return 1;
+            }
+        }
+
+        return 0;
+    }
+
     uint8_t mask = index->profile_masks[key];
     int profile_count = index->profile_counts[key];
     if (mask == LEGIT_MASK) {
@@ -1507,7 +1636,13 @@ static int classify_risky_flat(const index_t *index, const int16_t *q) {
     int64_t top_dist[K] = {INT64_MAX, INT64_MAX, INT64_MAX, INT64_MAX, INT64_MAX};
     uint8_t top_label[K] = {0, 0, 0, 0, 0};
     int key = bucket_key(q);
-    const uint16_t *neighbor_keys = index->neighbor_orders + (int64_t)key * BUCKET_COUNT;
+    uint16_t generated_neighbor_keys[BUCKET_COUNT];
+    const uint16_t *neighbor_keys = index->neighbor_orders + (int64_t)key * index->neighbor_order_count;
+    if (index->neighbor_order_count < BUCKET_COUNT) {
+        (void)fill_neighbor_keys_for_key(key, generated_neighbor_keys);
+        neighbor_keys = generated_neighbor_keys;
+    }
+
     (void)rinha_consider_risky_fine_avx2(
         index->risky_vectors,
         index->risky_labels,
@@ -1532,12 +1667,13 @@ static int classify(const index_t *index, const settings_t *settings, const int1
     int64_t top_dist[K] = {INT64_MAX, INT64_MAX, INT64_MAX, INT64_MAX, INT64_MAX};
     uint8_t top_label[K] = {0, 0, 0, 0, 0};
     int key = bucket_key(q);
-    const uint16_t *neighbor_keys = index->neighbor_orders + (int64_t)key * BUCKET_COUNT;
-    int candidates = rinha_consider_ann_avx2(
+    const uint16_t *neighbor_keys = index->neighbor_orders + (int64_t)key * index->neighbor_order_count;
+    int candidates = rinha_consider_ann_avx2_limited(
         index->vectors,
         index->labels,
         index->bucket_offsets,
         neighbor_keys,
+        index->neighbor_order_count,
         q,
         settings->early_candidates,
         settings->min_candidates,
@@ -1550,6 +1686,10 @@ static int classify(const index_t *index, const settings_t *settings, const int1
         return classify_flat(index, q, INT64_MAX);
     }
 
+    if (candidates < settings->min_candidates && index->neighbor_order_count < BUCKET_COUNT) {
+        return classify_flat(index, q, top_dist[K - 1]);
+    }
+
     int frauds = count_frauds(top_label);
     if (!should_use_exact_fallback(q, frauds)) {
         return frauds;
@@ -1558,24 +1698,16 @@ static int classify(const index_t *index, const settings_t *settings, const int1
     return classify_risky_flat(index, q);
 }
 
-static const char *response_for_frauds(int fraud_count, size_t *len) {
-    const char *response;
+static inline response_t response_for_frauds(int fraud_count) {
     if (fraud_count <= 0) {
-        response = response_00;
-    } else if (fraud_count == 1) {
-        response = response_02;
-    } else if (fraud_count == 2) {
-        response = response_04;
-    } else if (fraud_count == 3) {
-        response = response_06;
-    } else if (fraud_count == 4) {
-        response = response_08;
-    } else {
-        response = response_10;
+        return fraud_responses[0];
     }
 
-    *len = strlen(response);
-    return response;
+    if (fraud_count >= K) {
+        return fraud_responses[K];
+    }
+
+    return fraud_responses[fraud_count];
 }
 
 static int find_bytes(const char *haystack, int haystack_len, const char *needle, int needle_len) {
@@ -1678,9 +1810,8 @@ static void handle_request(int fd, const char *buffer, int used, int header_end,
     }
 
     int frauds = classify(index, settings, query);
-    size_t response_len;
-    const char *response = response_for_frauds(frauds, &response_len);
-    (void)send_all(fd, response, response_len);
+    response_t response = response_for_frauds(frauds);
+    (void)send_all(fd, response.data, response.len);
 }
 
 static void *client_thread(void *arg) {

@@ -34,6 +34,7 @@ internal static class BinaryIndexBuilder
     private const uint SectionIvfOrders = 12;
     private const uint SectionBlockVectors = 13;
     private const uint SectionProfileFraudCounts = 14;
+    private const uint SectionProfileCompactCounts = 15;
 
     public static void Build(string outputPath, Stream input)
     {
@@ -151,8 +152,8 @@ internal static class BinaryIndexBuilder
         bool nativeOnly)
     {
         var sections = new List<SectionEntry>(16);
-        WriteProfileSections(output, vectors, labels, orderedOriginalIds, sections);
-        WriteNeighborOrdersSection(output, sections);
+        WriteProfileSections(output, vectors, labels, orderedOriginalIds, sections, nativeOnly);
+        WriteNeighborOrdersSection(output, sections, nativeOnly);
         if (!nativeOnly)
         {
             WriteIvfOrdersSection(output, vectors, orderedOriginalIds, sections);
@@ -197,8 +198,28 @@ internal static class BinaryIndexBuilder
         ReadOnlySpan<short> vectors,
         ReadOnlySpan<byte> labels,
         ReadOnlySpan<uint> orderedOriginalIds,
-        List<SectionEntry> sections)
+        List<SectionEntry> sections,
+        bool nativeOnly)
     {
+        if (nativeOnly)
+        {
+            var compactCounts = new byte[ProfileKeyCount * 2];
+            for (var mappedId = 0; mappedId < orderedOriginalIds.Length; mappedId++)
+            {
+                var originalId = (int)orderedOriginalIds[mappedId];
+                var vector = vectors.Slice(originalId * Constants.Dim, Constants.Dim);
+                var key = ProfileKey(vector) * 2;
+                var offset = labels[originalId] == 1 ? key + 1 : key;
+                if (compactCounts[offset] < byte.MaxValue)
+                {
+                    compactCounts[offset]++;
+                }
+            }
+
+            WriteSection(output, SectionProfileCompactCounts, compactCounts, sections);
+            return;
+        }
+
         var profileCounts = new ushort[ProfileKeyCount];
         var profileFraudCounts = new ushort[ProfileKeyCount];
         var profileMasks = new byte[ProfileKeyCount];
@@ -233,10 +254,26 @@ internal static class BinaryIndexBuilder
         WriteSection(output, SectionProfileFraudCounts, MemoryMarshal.AsBytes(profileFraudCounts.AsSpan()), sections);
     }
 
-    private static void WriteNeighborOrdersSection(FileStream output, List<SectionEntry> sections)
+    private static void WriteNeighborOrdersSection(FileStream output, List<SectionEntry> sections, bool nativeOnly)
     {
+        var orderCount = nativeOnly
+            ? Math.Clamp(EnvInt("BUILD_NEIGHBOR_ORDER_COUNT", 128), 1, Constants.BucketCount)
+            : Constants.BucketCount;
         var neighborOrders = Vectorizer.BuildNeighborKeyOrders();
-        WriteSection(output, SectionNeighborOrders, MemoryMarshal.AsBytes(neighborOrders.AsSpan()), sections);
+        if (orderCount == Constants.BucketCount)
+        {
+            WriteSection(output, SectionNeighborOrders, MemoryMarshal.AsBytes(neighborOrders.AsSpan()), sections);
+            return;
+        }
+
+        var compactOrders = new ushort[Constants.BucketCount * orderCount];
+        for (var bucket = 0; bucket < Constants.BucketCount; bucket++)
+        {
+            neighborOrders.AsSpan(bucket * Constants.BucketCount, orderCount)
+                .CopyTo(compactOrders.AsSpan(bucket * orderCount, orderCount));
+        }
+
+        WriteSection(output, SectionNeighborOrders, MemoryMarshal.AsBytes(compactOrders.AsSpan()), sections);
     }
 
     private static void WriteIvfOrdersSection(
@@ -512,6 +549,12 @@ internal static class BinaryIndexBuilder
         return value == "1" ||
                value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
                value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int EnvInt(string name, int fallback)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(value, out var parsed) ? parsed : fallback;
     }
 
     private static bool IsRiskyFallbackReference(ReadOnlySpan<short> vector, in RiskyFallbackFilter filter)

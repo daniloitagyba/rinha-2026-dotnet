@@ -1,10 +1,11 @@
 services:
   lb:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:085be42c357f8609b42d7b98a21d51b64187ba4e
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:abe26659b47164edde7edbca152ee45b2700a60f
     platform: linux/amd64
     entrypoint: ["rinha-lb"]
     environment:
       LB_MODE: fdpass
+      TCP_DEFER_ACCEPT: "1"
     ports:
       - "9999:9999"
     volumes:
@@ -21,11 +22,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.12"
+          cpus: "0.10"
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:085be42c357f8609b42d7b98a21d51b64187ba4e
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:abe26659b47164edde7edbca152ee45b2700a60f
     platform: linux/amd64
     entrypoint: ["rinha-native-api"]
     environment:
@@ -60,6 +61,7 @@ services:
       RISKY_MERCHANT_AVG_MAX: "420"
       RISKY_NATIVE_FINE: "1"
       NATIVE_ANN: "1"
+      NATIVE_EPOLL: "1"
     volumes:
       - backend-sockets:/sockets
     security_opt:
@@ -71,11 +73,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.44"
+          cpus: "0.45"
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:085be42c357f8609b42d7b98a21d51b64187ba4e
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:abe26659b47164edde7edbca152ee45b2700a60f
     platform: linux/amd64
     entrypoint: ["rinha-native-api"]
     environment:
@@ -110,6 +112,7 @@ services:
       RISKY_MERCHANT_AVG_MAX: "420"
       RISKY_NATIVE_FINE: "1"
       NATIVE_ANN: "1"
+      NATIVE_EPOLL: "1"
     volumes:
       - backend-sockets:/sockets
     security_opt:
@@ -121,7 +124,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.44"
+          cpus: "0.45"
           memory: "156MB"
 
 volumes:

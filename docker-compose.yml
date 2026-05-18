@@ -33,6 +33,7 @@ services:
     image: ghcr.io/daniloitagyba/rinha-2026-dotnet:latest
     platform: linux/amd64
     cpuset: "0,1"
+    entrypoint: ["rinha-native-api"]
     build:
       context: .
       args:
@@ -42,6 +43,7 @@ services:
       INDEX_PATH: /app/data/references.idx
       INDEX_HUGEPAGES: "1"
       SERVER_MODE: raw
+      FD_RAW: "1"
       TP_MIN_THREADS: "64"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
@@ -51,6 +53,9 @@ services:
       PROFILE_MIN_COUNT: "15"
       PROFILE_LEGIT_MIN_COUNT: "5"
       PROFILE_FRAUD_MIN_COUNT: "15"
+      PROFILE_DOMINANT_FASTPATH: "1"
+      PROFILE_DOMINANT_MIN_COUNT: "15"
+      PROFILE_DOMINANT_MAX_OPPOSITE: "2"
       EXACT_FALLBACK: "risky"
       EARLY_EDGE_FALLBACK: "1"
       RISKY_BUCKETS: "1"
@@ -83,6 +88,7 @@ services:
     image: ghcr.io/daniloitagyba/rinha-2026-dotnet:latest
     platform: linux/amd64
     cpuset: "2,3"
+    entrypoint: ["rinha-native-api"]
     build:
       context: .
       args:
@@ -92,6 +98,7 @@ services:
       INDEX_PATH: /app/data/references.idx
       INDEX_HUGEPAGES: "1"
       SERVER_MODE: raw
+      FD_RAW: "1"
       TP_MIN_THREADS: "64"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
@@ -101,6 +108,9 @@ services:
       PROFILE_MIN_COUNT: "15"
       PROFILE_LEGIT_MIN_COUNT: "5"
       PROFILE_FRAUD_MIN_COUNT: "15"
+      PROFILE_DOMINANT_FASTPATH: "1"
+      PROFILE_DOMINANT_MIN_COUNT: "15"
+      PROFILE_DOMINANT_MAX_OPPOSITE: "2"
       EXACT_FALLBACK: "risky"
       EARLY_EDGE_FALLBACK: "1"
       RISKY_BUCKETS: "1"

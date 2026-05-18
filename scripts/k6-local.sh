@@ -12,6 +12,7 @@ KEEP_SERVICES="${KEEP_SERVICES:-0}"
 REFRESH_DATA="${REFRESH_DATA:-0}"
 PULL="${PULL:-0}"
 OVERRIDE_FILE=""
+EXTRA_COMPOSE_FILE="${EXTRA_COMPOSE_FILE:-}"
 DOCKER_OS=""
 
 if command -v docker >/dev/null 2>&1; then
@@ -79,8 +80,12 @@ if [ "$REFRESH_DATA" = "1" ] || [ ! -f "$ROOT/test/test-data.json" ]; then
 fi
 
 compose() {
-  if [ -n "$OVERRIDE_FILE" ]; then
+  if [ -n "$OVERRIDE_FILE" ] && [ -n "$EXTRA_COMPOSE_FILE" ]; then
+    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" -f "$EXTRA_COMPOSE_FILE" -f "$OVERRIDE_FILE" "$@"
+  elif [ -n "$OVERRIDE_FILE" ]; then
     docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" -f "$OVERRIDE_FILE" "$@"
+  elif [ -n "$EXTRA_COMPOSE_FILE" ]; then
+    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" -f "$EXTRA_COMPOSE_FILE" "$@"
   else
     docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
   fi

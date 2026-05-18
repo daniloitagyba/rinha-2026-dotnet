@@ -16,6 +16,8 @@ RUN mkdir -p /out/lb \
     && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -pthread -o /out/lb/rinha-lb src/lb/rinha-lb.c
 RUN mkdir -p /out/native \
     && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -fPIC -shared -o /out/native/librinha_native.so src/native/rinha_native.c
+RUN mkdir -p /out/native-api \
+    && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -pthread -o /out/native-api/rinha-native-api src/native/rinha_native_api.c src/native/rinha_native.c
 RUN mkdir -p /out/data \
     && if [ -f resources/references.json.gz ]; then \
          gzip -dc resources/references.json.gz | BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" /out/app/RinhaFraud build-index /out/data/references.idx ; \
@@ -33,6 +35,7 @@ FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble
 WORKDIR /app
 COPY --from=builder /out/app/RinhaFraud /usr/local/bin/rinha-fraud
 COPY --from=builder /out/lb/rinha-lb /usr/local/bin/rinha-lb
+COPY --from=builder /out/native-api/rinha-native-api /usr/local/bin/rinha-native-api
 COPY --from=builder /out/native/librinha_native.so /usr/local/lib/librinha_native.so
 COPY --from=builder /out/data /app/data
 

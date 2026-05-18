@@ -128,14 +128,15 @@ internal static class BinaryIndexBuilder
             output.Write(fourBytes);
         }
 
-        var bucketItemsOffset = output.Position;
-        for (uint id = 0; id < labels.Count; id++)
+        var nativeOnly = EnvBool("BUILD_NATIVE_ONLY_INDEX", false);
+        var bucketItemsOffset = nativeOnly ? 0 : output.Position;
+        for (uint id = 0; !nativeOnly && id < labels.Count; id++)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(fourBytes, id);
             output.Write(fourBytes);
         }
 
-        var extensionDirectoryOffset = WriteExtensionSections(output, vectorSpan, labelSpan, items);
+        var extensionDirectoryOffset = WriteExtensionSections(output, vectorSpan, labelSpan, items, nativeOnly);
         var fileLength = output.Position;
         output.Position = 0;
         WriteHeader(output, labels.Count, vectorsOffset, labelsOffset, bucketOffsetsOffset, bucketItemsOffset, fileLength, extensionDirectoryOffset);
@@ -146,18 +147,23 @@ internal static class BinaryIndexBuilder
         FileStream output,
         ReadOnlySpan<short> vectors,
         ReadOnlySpan<byte> labels,
-        ReadOnlySpan<uint> orderedOriginalIds)
+        ReadOnlySpan<uint> orderedOriginalIds,
+        bool nativeOnly)
     {
         var sections = new List<SectionEntry>(16);
         WriteProfileSections(output, vectors, labels, orderedOriginalIds, sections);
         WriteNeighborOrdersSection(output, sections);
-        WriteIvfOrdersSection(output, vectors, orderedOriginalIds, sections);
+        if (!nativeOnly)
+        {
+            WriteIvfOrdersSection(output, vectors, orderedOriginalIds, sections);
+        }
+
         if (EnvBool("BUILD_BLOCK_INDEX", false))
         {
             WriteBlockVectorsSection(output, vectors, orderedOriginalIds, sections);
         }
 
-        WriteRiskySections(output, vectors, labels, orderedOriginalIds, sections);
+        WriteRiskySections(output, vectors, labels, orderedOriginalIds, sections, nativeOnly);
         return WriteExtensionDirectory(output, sections);
     }
 
@@ -302,7 +308,8 @@ internal static class BinaryIndexBuilder
         ReadOnlySpan<short> vectors,
         ReadOnlySpan<byte> labels,
         ReadOnlySpan<uint> orderedOriginalIds,
-        List<SectionEntry> sections)
+        List<SectionEntry> sections,
+        bool nativeOnly)
     {
         var filter = RiskyFallbackFilter.PrecomputedDefault();
         var originalIds = new List<int>(128_000);
@@ -363,7 +370,7 @@ internal static class BinaryIndexBuilder
 
         var orderedVectors = new short[originalIds.Count * RiskyVectorStride];
         var orderedLabels = new byte[originalIds.Count];
-        var soaVectors = new short[originalIds.Count * Constants.Dim];
+        var soaVectors = nativeOnly ? Array.Empty<short>() : new short[originalIds.Count * Constants.Dim];
         var writePositions = new int[RiskyFineBucketCount];
         fineBucketOffsets.AsSpan(0, RiskyFineBucketCount).CopyTo(writePositions);
 
@@ -378,7 +385,10 @@ internal static class BinaryIndexBuilder
             {
                 var value = source[dim];
                 orderedVectors[vectorStart + dim] = value;
-                soaVectors[dim * originalIds.Count + writePosition] = value;
+                if (!nativeOnly)
+                {
+                    soaVectors[dim * originalIds.Count + writePosition] = value;
+                }
             }
 
             orderedLabels[writePosition] = labels[originalId];
@@ -405,11 +415,18 @@ internal static class BinaryIndexBuilder
         WriteSection(output, SectionRiskyMeta, meta, sections);
         WriteSection(output, SectionRiskyVectors, MemoryMarshal.AsBytes(orderedVectors.AsSpan()), sections);
         WriteSection(output, SectionRiskyLabels, orderedLabels, sections);
-        WriteSection(output, SectionRiskyBucketOffsets, MemoryMarshal.AsBytes(bucketOffsets.AsSpan()), sections);
+        if (!nativeOnly)
+        {
+            WriteSection(output, SectionRiskyBucketOffsets, MemoryMarshal.AsBytes(bucketOffsets.AsSpan()), sections);
+        }
+
         WriteSection(output, SectionRiskyFineBucketOffsets, MemoryMarshal.AsBytes(fineBucketOffsets.AsSpan()), sections);
         WriteSection(output, SectionRiskyCoarseFineOffsets, MemoryMarshal.AsBytes(coarseFineOffsets.AsSpan()), sections);
         WriteSection(output, SectionRiskyFineKeys, MemoryMarshal.AsBytes(fineKeys.AsSpan()), sections);
-        WriteSection(output, SectionRiskySoa, MemoryMarshal.AsBytes(soaVectors.AsSpan()), sections);
+        if (!nativeOnly)
+        {
+            WriteSection(output, SectionRiskySoa, MemoryMarshal.AsBytes(soaVectors.AsSpan()), sections);
+        }
     }
 
     private static void WriteSection(FileStream output, uint type, ReadOnlySpan<byte> data, List<SectionEntry> sections)

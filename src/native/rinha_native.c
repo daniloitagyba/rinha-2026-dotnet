@@ -119,12 +119,12 @@ static inline int strong_decision(const uint8_t *top_label, int include_edges) {
     return include_edges ? (frauds <= 1 || frauds >= K - 1) : (frauds == 0 || frauds == K);
 }
 
-static int32_t consider_ann_avx2(
+__attribute__((visibility("default")))
+int32_t rinha_consider_ann_avx2(
     const int16_t *vectors,
     const uint8_t *labels,
     const int32_t *bucket_offsets,
     const uint16_t *neighbor_keys,
-    int32_t neighbor_count,
     const int16_t *query,
     int32_t early_candidates,
     int32_t min_candidates,
@@ -133,11 +133,8 @@ static int32_t consider_ann_avx2(
     int64_t *top_dist,
     uint8_t *top_label) {
     int32_t candidates = 0;
-    if (neighbor_count < 1 || neighbor_count > BUCKET_COUNT) {
-        neighbor_count = BUCKET_COUNT;
-    }
 
-    for (int neighbor_index = 0; neighbor_index < neighbor_count; neighbor_index++) {
+    for (int neighbor_index = 0; neighbor_index < BUCKET_COUNT; neighbor_index++) {
         int key = neighbor_keys[neighbor_index];
         int start = bucket_offsets[key];
         int end = bucket_offsets[key + 1];
@@ -169,63 +166,6 @@ static int32_t consider_ann_avx2(
     }
 
     return candidates;
-}
-
-__attribute__((visibility("default")))
-int32_t rinha_consider_ann_avx2(
-    const int16_t *vectors,
-    const uint8_t *labels,
-    const int32_t *bucket_offsets,
-    const uint16_t *neighbor_keys,
-    const int16_t *query,
-    int32_t early_candidates,
-    int32_t min_candidates,
-    int32_t max_candidates,
-    int32_t early_edge_fallback,
-    int64_t *top_dist,
-    uint8_t *top_label) {
-    return consider_ann_avx2(
-        vectors,
-        labels,
-        bucket_offsets,
-        neighbor_keys,
-        BUCKET_COUNT,
-        query,
-        early_candidates,
-        min_candidates,
-        max_candidates,
-        early_edge_fallback,
-        top_dist,
-        top_label);
-}
-
-__attribute__((visibility("default")))
-int32_t rinha_consider_ann_avx2_limited(
-    const int16_t *vectors,
-    const uint8_t *labels,
-    const int32_t *bucket_offsets,
-    const uint16_t *neighbor_keys,
-    int32_t neighbor_count,
-    const int16_t *query,
-    int32_t early_candidates,
-    int32_t min_candidates,
-    int32_t max_candidates,
-    int32_t early_edge_fallback,
-    int64_t *top_dist,
-    uint8_t *top_label) {
-    return consider_ann_avx2(
-        vectors,
-        labels,
-        bucket_offsets,
-        neighbor_keys,
-        neighbor_count,
-        query,
-        early_candidates,
-        min_candidates,
-        max_candidates,
-        early_edge_fallback,
-        top_dist,
-        top_label);
 }
 
 __attribute__((visibility("default")))

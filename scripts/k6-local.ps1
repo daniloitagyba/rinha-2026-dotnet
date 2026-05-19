@@ -60,6 +60,7 @@ param(
     [string]$LbCpu = $env:LB_CPU,
     [string]$LbMemory = $env:LB_MEMORY,
     [string]$LbCpuset = $env:LB_CPUSET,
+    [string]$TcpDeferAccept = $env:TCP_DEFER_ACCEPT,
     [string]$SubmissionComposeFile = $env:SUBMISSION_COMPOSE_FILE,
     [switch]$KeepServices,
     [switch]$RefreshData,
@@ -199,13 +200,23 @@ $hasCpusetOverrides =
     -not [string]::IsNullOrWhiteSpace($Api2Cpuset) -or
     -not [string]::IsNullOrWhiteSpace($LbCpuset)
 
-if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides -or $hasCpusetOverrides) {
+$hasLbEnvironmentOverrides =
+    -not [string]::IsNullOrWhiteSpace($TcpDeferAccept)
+
+if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides -or $hasCpusetOverrides -or $hasLbEnvironmentOverrides) {
     $overrideFile = Join-Path ([System.IO.Path]::GetTempPath()) "$ProjectName.override.yml"
     $lines = @("services:")
-    if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory) -or -not [string]::IsNullOrWhiteSpace($LbCpuset)) {
+    if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory) -or -not [string]::IsNullOrWhiteSpace($LbCpuset) -or $hasLbEnvironmentOverrides) {
         $lines += "  lb:"
         if (-not [string]::IsNullOrWhiteSpace($LbCpuset)) {
             $lines += "    cpuset: `"$LbCpuset`""
+        }
+
+        if ($hasLbEnvironmentOverrides) {
+            $lines += "    environment:"
+            if (-not [string]::IsNullOrWhiteSpace($TcpDeferAccept)) {
+                $lines += "      TCP_DEFER_ACCEPT: `"$TcpDeferAccept`""
+            }
         }
 
         if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory)) {

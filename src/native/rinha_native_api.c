@@ -91,6 +91,7 @@ typedef struct {
     const int32_t *risky_fine_offsets;
     const int32_t *risky_coarse_offsets;
     const int32_t *risky_fine_keys;
+    uint8_t *reference_fastpath;
 } index_t;
 
 typedef struct {
@@ -105,6 +106,7 @@ typedef struct {
     int profile_dominant_min_count;
     int profile_dominant_max_opposite;
     int keep_alive_requests;
+    int fd_immediate_read;
 } settings_t;
 
 typedef struct {
@@ -209,6 +211,7 @@ static settings_t load_settings(void) {
     settings.profile_dominant_min_count = env_int("PROFILE_DOMINANT_MIN_COUNT", 15);
     settings.profile_dominant_max_opposite = env_int("PROFILE_DOMINANT_MAX_OPPOSITE", 2);
     settings.keep_alive_requests = env_int("KEEP_ALIVE_REQUESTS", 0);
+    settings.fd_immediate_read = env_bool("FD_IMMEDIATE_READ", 0);
     return settings;
 }
 
@@ -407,6 +410,7 @@ static int open_index(const char *path, index_t *index) {
 }
 
 static void close_index(index_t *index) {
+    free(index->reference_fastpath);
     if (index->base != NULL) {
         munmap(index->base, index->length);
     }
@@ -1244,6 +1248,68 @@ static inline int profile_key(const int16_t *v) {
     return key;
 }
 
+#define REFERENCE_FASTPATH_SIZE (1U << 21)
+#define REFERENCE_FASTPATH_MISS 255U
+
+static inline uint32_t reference_fastpath_key(const int16_t *v) {
+    uint32_t key = 0;
+    uint32_t shift = 0;
+#define ADD_REF_BITS(value, bits) do { key |= ((uint32_t)(value) & ((1U << (bits)) - 1U)) << shift; shift += (bits); } while (0)
+    ADD_REF_BITS(bucket8(v[0]), 3);
+    ADD_REF_BITS(bucket8(v[2]), 3);
+    ADD_REF_BITS(bucket8(v[7]), 3);
+    ADD_REF_BITS(bucket4(v[8]), 2);
+    ADD_REF_BITS(v[9] > 0 ? 1 : 0, 1);
+    ADD_REF_BITS(v[10] > 0 ? 1 : 0, 1);
+    ADD_REF_BITS(v[11] > 0 ? 1 : 0, 1);
+    ADD_REF_BITS(bucket4(v[12]), 2);
+    ADD_REF_BITS(v[1] > 1000 ? 1 : 0, 1);
+    ADD_REF_BITS(bucket4(v[3]), 2);
+    ADD_REF_BITS(bucket4(v[13]), 2);
+#undef ADD_REF_BITS
+    return key;
+}
+
+static int build_reference_fastpath(index_t *index) {
+    if (!env_bool("REFERENCE_FASTPATH_FRAUD_ONLY", 0)) {
+        return 0;
+    }
+
+    uint16_t min_count = (uint16_t)env_int("REFERENCE_FASTPATH_FRAUD_MIN_COUNT", 64);
+    uint16_t *counts = (uint16_t *)calloc(REFERENCE_FASTPATH_SIZE, sizeof(*counts));
+    uint8_t *masks = (uint8_t *)calloc(REFERENCE_FASTPATH_SIZE, sizeof(*masks));
+    uint8_t *table = (uint8_t *)malloc(REFERENCE_FASTPATH_SIZE);
+    if (counts == NULL || masks == NULL || table == NULL) {
+        free(counts);
+        free(masks);
+        free(table);
+        return -1;
+    }
+
+    memset(table, REFERENCE_FASTPATH_MISS, REFERENCE_FASTPATH_SIZE);
+    for (int i = 0; i < index->count; i++) {
+        uint32_t key = reference_fastpath_key(index->vectors + (int64_t)i * DIM);
+        if (counts[key] != UINT16_MAX) {
+            counts[key]++;
+        }
+        masks[key] |= index->labels[i] != 0 ? FRAUD_MASK : LEGIT_MASK;
+    }
+
+    uint32_t active = 0;
+    for (uint32_t i = 0; i < REFERENCE_FASTPATH_SIZE; i++) {
+        if (masks[i] == FRAUD_MASK && counts[i] >= min_count) {
+            table[i] = K;
+            active++;
+        }
+    }
+
+    free(counts);
+    free(masks);
+    index->reference_fastpath = table;
+    fprintf(stderr, "reference fraud fastpath active_slots=%u min_count=%u\n", active, (unsigned)min_count);
+    return 0;
+}
+
 static inline int64_t range_distance_squared(int16_t value, int min, int max) {
     if (value < min) {
         int64_t d = (int64_t)min - value;
@@ -1473,6 +1539,20 @@ static int try_profile_fast_decision(const index_t *index, const settings_t *set
     return 0;
 }
 
+static int try_reference_fast_decision(const index_t *index, const int16_t *q, int *fraud_count) {
+    if (index->reference_fastpath == NULL) {
+        return 0;
+    }
+
+    uint8_t value = index->reference_fastpath[reference_fastpath_key(q)];
+    if (value == REFERENCE_FASTPATH_MISS) {
+        return 0;
+    }
+
+    *fraud_count = value;
+    return 1;
+}
+
 static int classify_flat(const index_t *index, const int16_t *q, int64_t seed_cutoff) {
     int64_t top_dist[K] = {INT64_MAX, INT64_MAX, INT64_MAX, INT64_MAX, INT64_MAX};
     uint8_t top_label[K] = {0, 0, 0, 0, 0};
@@ -1526,6 +1606,10 @@ static int classify_risky_flat(const index_t *index, const int16_t *q) {
 static int classify(const index_t *index, const settings_t *settings, const int16_t *q) {
     int fraud_count = 0;
     if (try_profile_fast_decision(index, settings, q, &fraud_count)) {
+        return fraud_count;
+    }
+
+    if (try_reference_fast_decision(index, q, &fraud_count)) {
         return fraud_count;
     }
 
@@ -1887,7 +1971,8 @@ static int start_control_thread(int fd, index_t *index, const settings_t *settin
 
 static int create_unix_listener(const char *path) {
     unlink(path);
-    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    int socket_type = env_bool("FD_CONTROL_SEQPACKET", 0) ? SOCK_SEQPACKET : SOCK_STREAM;
+    int fd = socket(AF_UNIX, socket_type | SOCK_CLOEXEC, 0);
     if (fd < 0) {
         perror("socket");
         return -1;
@@ -1961,26 +2046,35 @@ static void accept_control_epoll(int epoll_fd, int listener) {
     }
 }
 
-static void accept_client_fd_epoll(int epoll_fd, int fd) {
+static int handle_client_epoll(epoll_state_t *state, const index_t *index, const settings_t *settings);
+
+static epoll_state_t *accept_client_fd_epoll(int epoll_fd, int fd) {
     (void)set_nonblocking(fd);
     epoll_state_t *state = calloc(1, sizeof(*state));
     if (state == NULL) {
         close(fd);
-        return;
+        return NULL;
     }
 
     state->kind = EPOLL_CLIENT;
     state->fd = fd;
     if (add_epoll_state(epoll_fd, state) < 0) {
         close_epoll_state(epoll_fd, state);
+        return NULL;
     }
+
+    return state;
 }
 
-static int handle_control_epoll(int epoll_fd, epoll_state_t *state) {
+static int handle_control_epoll(int epoll_fd, epoll_state_t *state, const index_t *index, const settings_t *settings) {
     for (;;) {
         int fd = recv_fd_nonblocking(state->fd);
         if (fd >= 0) {
-            accept_client_fd_epoll(epoll_fd, fd);
+            epoll_state_t *client = accept_client_fd_epoll(epoll_fd, fd);
+            if (client != NULL && settings->fd_immediate_read &&
+                handle_client_epoll(client, index, settings) < 0) {
+                close_epoll_state(epoll_fd, client);
+            }
             continue;
         }
 
@@ -2090,7 +2184,7 @@ static int serve_fdpass_epoll(const char *control_path, index_t *index, const se
             }
 
             if (state->kind == EPOLL_CONTROL) {
-                if (handle_control_epoll(epoll_fd, state) < 0) {
+                if (handle_control_epoll(epoll_fd, state, index, settings) < 0) {
                     close_epoll_state(epoll_fd, state);
                 }
             } else if (state->kind == EPOLL_CLIENT) {
@@ -2278,6 +2372,11 @@ int main(int argc, char **argv) {
     }
 
     settings_t settings = load_settings();
+    if (build_reference_fastpath(&index) != 0) {
+        close_index(&index);
+        return 1;
+    }
+
     if (argc >= 3 && strcmp(argv[1], "eval") == 0) {
         int rc = run_eval(&index, &settings, argv[2]);
         close_index(&index);

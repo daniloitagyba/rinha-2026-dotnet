@@ -136,8 +136,14 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
    [ -n "${FD_RECEIVERS:-}" ] || \
    [ -n "${FD_RAW:-}" ] || \
+   [ -n "${NATIVE_EPOLL:-}" ] || \
+   [ -n "${FD_IMMEDIATE_READ:-}" ] || \
+   [ -n "${FD_CONTROL_SEQPACKET:-}" ] || \
+   [ -n "${REFERENCE_FASTPATH_FRAUD_ONLY:-}" ] || \
+   [ -n "${REFERENCE_FASTPATH_FRAUD_MIN_COUNT:-}" ] || \
    [ -n "${SERVER_MODE:-}" ] || \
    [ -n "${INDEX_HUGEPAGES:-}" ] || \
+   [ -n "${MALLOC_ARENA_MAX:-}" ] || \
    [ -n "${DOTNET_PROCESSOR_COUNT:-}" ] || \
    [ -n "${DOTNET_GCHeapCount:-}" ] || \
    [ -n "${DOTNET_ThreadPool_UnfairSemaphoreSpinLimit:-}" ] || \
@@ -157,13 +163,26 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${API2_CPUSET:-}" ] || \
    [ -n "${LB_CPU:-}" ] || \
    [ -n "${LB_MEMORY:-}" ] || \
-   [ -n "${LB_CPUSET:-}" ]; then
+   [ -n "${LB_CPUSET:-}" ] || \
+   [ -n "${TCP_DEFER_ACCEPT:-}" ] || \
+   [ -n "${LB_FAST2:-}" ] || \
+   [ -n "${LOGGING_NONE:-}" ]; then
   OVERRIDE_FILE="${OVERRIDE_FILE_PATH:-${TMPDIR:-/tmp}/${PROJECT_NAME}.override.yml}"
   {
     echo "services:"
-    if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ] || [ -n "${LB_CPUSET:-}" ]; then
+    if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ] || [ -n "${LB_CPUSET:-}" ] || [ -n "${FD_CONTROL_SEQPACKET:-}" ] || [ -n "${TCP_DEFER_ACCEPT:-}" ] || [ -n "${LB_FAST2:-}" ] || [ -n "${LOGGING_NONE:-}" ]; then
       echo "  lb:"
       [ -n "${LB_CPUSET:-}" ] && echo "    cpuset: \"$LB_CPUSET\""
+      if [ -n "${FD_CONTROL_SEQPACKET:-}" ] || [ -n "${TCP_DEFER_ACCEPT:-}" ] || [ -n "${LB_FAST2:-}" ]; then
+        echo "    environment:"
+        [ -n "${FD_CONTROL_SEQPACKET:-}" ] && echo "      FD_CONTROL_SEQPACKET: \"$FD_CONTROL_SEQPACKET\""
+        [ -n "${TCP_DEFER_ACCEPT:-}" ] && echo "      TCP_DEFER_ACCEPT: \"$TCP_DEFER_ACCEPT\""
+        [ -n "${LB_FAST2:-}" ] && echo "      LB_FAST2: \"$LB_FAST2\""
+      fi
+      if [ -n "${LOGGING_NONE:-}" ]; then
+        echo "    logging:"
+        echo "      driver: \"none\""
+      fi
       if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ]; then
         echo "    deploy:"
         echo "      resources:"
@@ -226,8 +245,14 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
       [ -n "${FD_RECEIVERS:-}" ] && echo "      FD_RECEIVERS: \"$FD_RECEIVERS\""
       [ -n "${FD_RAW:-}" ] && echo "      FD_RAW: \"$FD_RAW\""
+      [ -n "${NATIVE_EPOLL:-}" ] && echo "      NATIVE_EPOLL: \"$NATIVE_EPOLL\""
+      [ -n "${FD_IMMEDIATE_READ:-}" ] && echo "      FD_IMMEDIATE_READ: \"$FD_IMMEDIATE_READ\""
+      [ -n "${FD_CONTROL_SEQPACKET:-}" ] && echo "      FD_CONTROL_SEQPACKET: \"$FD_CONTROL_SEQPACKET\""
+      [ -n "${REFERENCE_FASTPATH_FRAUD_ONLY:-}" ] && echo "      REFERENCE_FASTPATH_FRAUD_ONLY: \"$REFERENCE_FASTPATH_FRAUD_ONLY\""
+      [ -n "${REFERENCE_FASTPATH_FRAUD_MIN_COUNT:-}" ] && echo "      REFERENCE_FASTPATH_FRAUD_MIN_COUNT: \"$REFERENCE_FASTPATH_FRAUD_MIN_COUNT\""
       [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""
       [ -n "${INDEX_HUGEPAGES:-}" ] && echo "      INDEX_HUGEPAGES: \"$INDEX_HUGEPAGES\""
+      [ -n "${MALLOC_ARENA_MAX:-}" ] && echo "      MALLOC_ARENA_MAX: \"$MALLOC_ARENA_MAX\""
       [ -n "${DOTNET_PROCESSOR_COUNT:-}" ] && echo "      DOTNET_PROCESSOR_COUNT: \"$DOTNET_PROCESSOR_COUNT\""
       [ -n "${DOTNET_GCHeapCount:-}" ] && echo "      DOTNET_GCHeapCount: \"$DOTNET_GCHeapCount\""
       [ -n "${DOTNET_ThreadPool_UnfairSemaphoreSpinLimit:-}" ] && echo "      DOTNET_ThreadPool_UnfairSemaphoreSpinLimit: \"$DOTNET_ThreadPool_UnfairSemaphoreSpinLimit\""
@@ -240,6 +265,10 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${TP_MAX_IO_THREADS:-}" ] && echo "      TP_MAX_IO_THREADS: \"$TP_MAX_IO_THREADS\""
       [ -n "${KEEP_ALIVE_REQUESTS:-}" ] && echo "      KEEP_ALIVE_REQUESTS: \"$KEEP_ALIVE_REQUESTS\""
       [ -n "${KEEP_ALIVE_IDLE_MS:-}" ] && echo "      KEEP_ALIVE_IDLE_MS: \"$KEEP_ALIVE_IDLE_MS\""
+      if [ -n "${LOGGING_NONE:-}" ]; then
+        echo "    logging:"
+        echo "      driver: \"none\""
+      fi
 
       if [ -n "${API_CPU:-}" ] || [ -n "${API_MEMORY:-}" ]; then
         echo "    deploy:"

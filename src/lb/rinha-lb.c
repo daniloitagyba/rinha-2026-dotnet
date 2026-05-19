@@ -55,6 +55,8 @@ static unsigned int backend_count = 2;
 static connection_t *closed_head = NULL;
 static int control_fds[MAX_BACKENDS];
 static char upstreams_storage[1024];
+static int fd_control_seqpacket = 0;
+static int lb_fast2 = 0;
 
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -230,7 +232,8 @@ static int fd_events(const fd_state_t *state) {
 }
 
 static int connect_control(unsigned int index) {
-    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    int socket_type = fd_control_seqpacket ? SOCK_SEQPACKET : SOCK_STREAM;
+    int fd = socket(AF_UNIX, socket_type | SOCK_CLOEXEC, 0);
     if (fd < 0) {
         return -1;
     }
@@ -388,6 +391,35 @@ static void accept_clients_fdpass(int listener) {
 
         set_tcp_nodelay(client_fd);
         set_small_socket_buffers(client_fd);
+
+        if (lb_fast2 && backend_count == 2) {
+            unsigned int index = choose_backend() & 1U;
+            int control_fd = ensure_control(index);
+            if (control_fd >= 0 && send_fd(control_fd, client_fd) == 0) {
+                close(client_fd);
+                continue;
+            }
+
+            if (control_fds[index] >= 0) {
+                close(control_fds[index]);
+                control_fds[index] = -1;
+            }
+
+            index ^= 1U;
+            control_fd = ensure_control(index);
+            if (control_fd >= 0 && send_fd(control_fd, client_fd) == 0) {
+                close(client_fd);
+                continue;
+            }
+
+            if (control_fds[index] >= 0) {
+                close(control_fds[index]);
+                control_fds[index] = -1;
+            }
+
+            close(client_fd);
+            continue;
+        }
 
         unsigned int start = choose_backend();
         int delivered = 0;
@@ -618,6 +650,8 @@ int main(void) {
 
     const char *mode = getenv("LB_MODE");
     int fdpass_mode = mode != NULL && strcmp(mode, "fdpass") == 0;
+    fd_control_seqpacket = env_enabled("FD_CONTROL_SEQPACKET", 0);
+    lb_fast2 = env_enabled("LB_FAST2", 0);
     init_backends(fdpass_mode);
 
     if (fdpass_mode) {

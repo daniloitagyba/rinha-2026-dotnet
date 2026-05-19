@@ -1559,25 +1559,23 @@ static int classify(const index_t *index, const settings_t *settings, const int1
 }
 
 static const char *response_for_frauds(int fraud_count, size_t *len) {
+    const char *response;
     if (fraud_count <= 0) {
-        *len = sizeof(response_00) - 1;
-        return response_00;
+        response = response_00;
     } else if (fraud_count == 1) {
-        *len = sizeof(response_02) - 1;
-        return response_02;
+        response = response_02;
     } else if (fraud_count == 2) {
-        *len = sizeof(response_04) - 1;
-        return response_04;
+        response = response_04;
     } else if (fraud_count == 3) {
-        *len = sizeof(response_06) - 1;
-        return response_06;
+        response = response_06;
     } else if (fraud_count == 4) {
-        *len = sizeof(response_08) - 1;
-        return response_08;
+        response = response_08;
     } else {
-        *len = sizeof(response_10) - 1;
-        return response_10;
+        response = response_10;
     }
+
+    *len = strlen(response);
+    return response;
 }
 
 static int find_bytes(const char *haystack, int haystack_len, const char *needle, int needle_len) {

@@ -18,7 +18,7 @@ RUN mkdir -p /out/lb \
 RUN mkdir -p /out/native \
     && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -fPIC -shared -o /out/native/librinha_native.so src/native/rinha_native.c
 RUN mkdir -p /out/native-api \
-    && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -pthread -o /out/native-api/rinha-native-api src/native/rinha_native_api.c src/native/rinha_native.c
+    && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -flto=thin -pthread -o /out/native-api/rinha-native-api src/native/rinha_native_api.c src/native/rinha_native.c
 RUN mkdir -p /out/data \
     && if [ -f resources/references.json.gz ]; then \
          gzip -dc resources/references.json.gz | BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" BUILD_NATIVE_ONLY_INDEX="$BUILD_NATIVE_ONLY_INDEX" /out/app/RinhaFraud build-index /out/data/references.idx ; \

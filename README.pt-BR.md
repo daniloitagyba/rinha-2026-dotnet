@@ -2,34 +2,77 @@
 
 [English version](README.md)
 
-API HTTP para calcular risco de fraude a partir de um payload transacional.
+Submissao da Rinha de Backend 2026 para score de fraude.
+
+Este repositorio hoje e uma implementacao hibrida .NET/C. O projeto .NET ainda
+controla o pipeline do modelo, o pre-processamento das referencias, os
+diagnosticos, o self-test e o eval offline. O caminho publicado que atende o
+benchmark roda em binarios C nativos.
+
+## Resultado Atual
+
+Execucao oficial publicada:
+
+- issue: `#5616`
+- p99: `0.98ms`
+- score final: `6000`
+- falsos positivos: `0`
+- falsos negativos: `0`
+- erros HTTP: `0`
 
 ## Arquitetura
 
-- load balancer TCP proprio em C com `epoll`
-- duas instancias da API em .NET Native AOT
-- servidor HTTP raw, sem Kestrel no caminho principal
-- comunicacao interna por Unix socket
-- indice binario de referencias incluido na imagem Docker
+A imagem competitiva contem tres binarios principais:
 
-O load balancer apenas aceita conexoes, escolhe uma API e copia bytes entre
-cliente e backend. A classificacao acontece somente nas APIs.
+- `rinha-fraud`: CLI em .NET 10 Native AOT usado para `build-index`, `eval`,
+  `self-test` e como servidor reserva
+- `rinha-lb`: load balancer TCP em C
+- `rinha-native-api`: API em C usada por `api1` e `api2` no compose submetido
+
+Topologia em runtime:
+
+- `lb` escuta na porta `9999`
+- `lb` usa fd handoff por Unix sockets para distribuir conexoes TCP aceitas
+- `api1` e `api2` executam `rinha-native-api`
+- o indice binario de referencias fica embutido na imagem Docker
+- `KDTREE_INDEX=1` ativa o caminho atual de busca exata por KD-tree
+
+Para trafego de fraude, o load balancer apenas aceita e distribui conexoes. Ele
+nao classifica transacoes e nao usa dados do payload relacionados a fraude. A
+classificacao acontece no processo da API.
+
+## Papel Do .NET
+
+O .NET ainda e o nucleo organizador do repositorio:
+
+- gera o indice a partir de `references.json.gz`
+- escreve o binario `references.idx`
+- mantem comandos de self-test e eval offline
+- preserva o classificador, parser, vetorizador e diagnosticos originais em C#
+- conduz o build Docker via `dotnet publish` com Native AOT
+
+O runtime vencedor atual nao e uma API .NET pura. A descricao mais correta e:
+
+```text
+pipeline .NET 10 Native AOT + hot path nativo em C
+```
 
 ## Classificacao
 
-O payload e convertido em um vetor quantizado de 14 dimensoes. A API busca os
-5 vizinhos mais proximos no indice de referencias e calcula:
+O payload e convertido em um vetor quantizado. A API busca os 5 vizinhos mais
+proximos no indice de referencias e calcula:
 
 - `fraud_score = vizinhos_fraudulentos / 5`
 - `approved = fraud_score < 0.6`
 
-O indice fica pre-processado em formato binario para reduzir custo de startup e
-evitar parsing de JSON em runtime.
+O indice e pre-processado em formato binario antes da imagem ser construida. O
+indice publicado atual inclui secoes de KD-tree particionado, entao a busca em
+runtime nao precisa varrer todo o conjunto de referencias a cada requisicao.
 
 ## Endpoints
 
-- `GET /ready`: indica que a instancia esta pronta
-- `POST /fraud-score`: recebe o payload transacional e retorna a decisao
+- `GET /ready`: healthcheck
+- `POST /fraud-score`: classificacao da transacao
 
 Resposta de classificacao:
 
@@ -39,43 +82,40 @@ Resposta de classificacao:
 
 ## Decisoes De Implementacao
 
-- vetorizacao sem alocacoes no caminho quente
-- indice agrupado por buckets para reduzir a busca inicial
-- fast path por perfil quando a decisao local e estavel
-- fallback exato restrito ao subconjunto de referencias de maior risco
-- fallback compacto com SIMD (`AVX2` quando disponivel, `SSE2` como reserva)
-- respostas HTTP pre-montadas para todos os valores possiveis de `fraud_score`
+- indice binario pre-processado dentro da imagem Docker
+- busca exata por KD-tree particionado no baseline publico atual
+- API nativa em C para o hot path do benchmark
+- load balancer TCP em C com fd handoff
+- respostas JSON pre-montadas para todos os valores possiveis de `fraud_score`
+- logica de profile e fallback risky mantida como caminhos validados
+- sem tabela de lookup por payload e sem logica de fraude no load balancer
 
 ## Estrutura
 
-- `src/RinhaFraud/`: API, parser, vetorizacao e indice de classificacao
+- `src/RinhaFraud/`: CLI .NET, builder do indice, eval, self-test e classificador original
+- `src/native/`: API nativa e runtime nativo de classificacao/busca
 - `src/lb/`: load balancer TCP
-- `scripts/`: scripts locais de build, validacao e carga
+- `scripts/`: scripts locais de build, validacao, release e carga
 - `resources/`: referencias usadas para montar o indice binario
-- `test/`: harness local de validacao
+- `test/`: harness local de validacao e snapshots de resultado remoto
+- `docker-compose.yml`: topologia local de build e benchmark
+- branch `submission`: compose oficial e metadata usados pelo bot
 
 ## Configuracao
 
-Variaveis principais das APIs:
+Variaveis principais de runtime:
 
-- `BIND_ADDR`: endereco de escuta, normalmente `unix:/sockets/api1.sock`
+- `BIND_ADDR`: endereco de escuta ou fd handoff
 - `INDEX_PATH`: caminho do indice binario
-- `SERVER_MODE`: modo do servidor HTTP raw
-- `WORKERS`: quantidade de workers por instancia
-- `TP_MIN_THREADS`: minimo do ThreadPool
-- `EARLY_CANDIDATES`, `MIN_CANDIDATES`, `MAX_CANDIDATES`: limites da busca
-- `PROFILE_FASTPATH`: habilita ou desabilita o fast path por perfil
+- `KDTREE_INDEX`: habilita as secoes KD-tree no runtime nativo
+- `WORKERS`: quantidade de workers por instancia de API
+- `EARLY_CANDIDATES`, `MIN_CANDIDATES`, `MAX_CANDIDATES`: limites de busca para caminhos sem KD
+- `PROFILE_FASTPATH`: habilita o fast path por perfil
 - `EXACT_FALLBACK`: modo do fallback exato
-- `RISKY_FINE_BUCKETS`: habilita sub-buckets booleanos no fallback de risco
-- `RISKY_SIMD`: habilita ou desabilita SIMD no fallback de risco
+- `RISKY_NATIVE_FINE`: habilita o caminho nativo de fine fallback
+- `LB_MODE`: modo do load balancer, atualmente `fdpass`
 
 ## Comandos
-
-Gerar o indice:
-
-```powershell
-scripts/build-index.sh resources/references.json.gz data/references.idx
-```
 
 Rodar self-test:
 
@@ -87,4 +127,16 @@ Build da imagem local:
 
 ```powershell
 docker compose build
+```
+
+Rodar benchmark local proximo do oficial:
+
+```powershell
+.\scripts\k6-local.ps1 -Mode build
+```
+
+Rodar o mesmo caminho pelo WSL/Linux:
+
+```sh
+MODE=build sh scripts/k6-local.sh
 ```

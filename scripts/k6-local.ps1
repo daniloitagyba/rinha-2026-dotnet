@@ -64,6 +64,7 @@ param(
     [string]$LbCpuset = $env:LB_CPUSET,
     [string]$TcpDeferAccept = $env:TCP_DEFER_ACCEPT,
     [string]$SubmissionComposeFile = $env:SUBMISSION_COMPOSE_FILE,
+    [string]$ExtraComposeFile = $env:EXTRA_COMPOSE_FILE,
     [switch]$KeepServices,
     [switch]$RefreshData,
     [switch]$Pull
@@ -289,6 +290,10 @@ function Compose {
     )
 
     $args = @("compose", "-p", $ProjectName, "-f", $composeFile)
+    if (-not [string]::IsNullOrWhiteSpace($ExtraComposeFile)) {
+        $args += @("-f", $ExtraComposeFile)
+    }
+
     if ($overrideFile) {
         $args += @("-f", $overrideFile)
     }

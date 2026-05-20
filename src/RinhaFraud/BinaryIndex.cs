@@ -40,6 +40,16 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private const uint SectionIvfOrders = 12;
     private const uint SectionBlockVectors = 13;
     private const uint SectionProfileFraudCounts = 14;
+    private const uint SectionKdMeta = 15;
+    private const uint SectionKdPartitions = 16;
+    private const uint SectionKdNodes = 17;
+    private const uint SectionKdVectors = 18;
+    private const uint SectionKdLabels = 19;
+    private const uint SectionKdIds = 20;
+    private const int KdPartitionCount = 256;
+    private const int KdVectorStride = 16;
+    private const int KdPartitionRecordSize = 72;
+    private const int KdNodeRecordSize = 80;
 
     private readonly MemoryMappedFile _mappedFile;
     private readonly MemoryMappedViewAccessor _accessor;
@@ -65,6 +75,13 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly long _neighborOrdersOffset;
     private readonly long _ivfOrdersOffset;
     private readonly long _blockVectorsOffset;
+    private readonly int _kdNodeCount;
+    private readonly int _kdMaxPartitions;
+    private readonly long _kdPartitionsOffset;
+    private readonly long _kdNodesOffset;
+    private readonly long _kdVectorsOffset;
+    private readonly long _kdLabelsOffset;
+    private readonly long _kdIdsOffset;
     private readonly int _riskyMappedCount;
     private readonly int _riskyMappedFineKeyCount;
     private readonly long _riskyMappedVectorsOffset;
@@ -82,6 +99,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly bool _useRiskyNativeFine;
     private readonly bool _useNativeAnn;
     private readonly bool _useNativeAnnDirect;
+    private readonly bool _useNativeKd;
     private readonly bool _useIvfOrder;
     private readonly bool _useMappedSimd;
     private readonly bool _useBlockScan;
@@ -114,6 +132,13 @@ internal unsafe sealed class BinaryIndex : IDisposable
         long neighborOrdersOffset,
         long ivfOrdersOffset,
         long blockVectorsOffset,
+        int kdNodeCount,
+        int kdMaxPartitions,
+        long kdPartitionsOffset,
+        long kdNodesOffset,
+        long kdVectorsOffset,
+        long kdLabelsOffset,
+        long kdIdsOffset,
         int riskyMappedCount,
         int riskyMappedFineKeyCount,
         long riskyMappedVectorsOffset,
@@ -131,6 +156,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         bool useRiskyNativeFine,
         bool useNativeAnn,
         bool useNativeAnnDirect,
+        bool useNativeKd,
         bool useIvfOrder,
         bool useMappedSimd,
         bool useBlockScan)
@@ -159,6 +185,13 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _neighborOrdersOffset = neighborOrdersOffset;
         _ivfOrdersOffset = ivfOrdersOffset;
         _blockVectorsOffset = blockVectorsOffset;
+        _kdNodeCount = kdNodeCount;
+        _kdMaxPartitions = kdMaxPartitions;
+        _kdPartitionsOffset = kdPartitionsOffset;
+        _kdNodesOffset = kdNodesOffset;
+        _kdVectorsOffset = kdVectorsOffset;
+        _kdLabelsOffset = kdLabelsOffset;
+        _kdIdsOffset = kdIdsOffset;
         _riskyMappedCount = riskyMappedCount;
         _riskyMappedFineKeyCount = riskyMappedFineKeyCount;
         _riskyMappedVectorsOffset = riskyMappedVectorsOffset;
@@ -176,6 +209,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _useRiskyNativeFine = useRiskyNativeFine;
         _useNativeAnn = useNativeAnn;
         _useNativeAnnDirect = useNativeAnnDirect;
+        _useNativeKd = useNativeKd && kdPartitionsOffset != 0;
         _useIvfOrder = useIvfOrder;
         _useMappedSimd = useMappedSimd;
         _useBlockScan = useBlockScan && blockVectorsOffset != 0;
@@ -250,6 +284,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var useRiskyNativeFine = EnvBool("RISKY_NATIVE_FINE", false);
             var useNativeAnn = EnvBool("NATIVE_ANN", false);
             var useNativeAnnDirect = EnvBool("NATIVE_ANN_DIRECT", false);
+            var useNativeKd = EnvBool("KDTREE_NATIVE", false);
+            var kdMaxPartitions = Math.Clamp(EnvInt("KDTREE_MAX_PARTITIONS", KdPartitionCount), 1, KdPartitionCount);
             var useIvfOrder = EnvBool("IVF_ORDER", false);
             var useMappedSimd = EnvBool("MAPPED_SIMD", true);
             var useBlockScan = EnvBool("BLOCK_SCAN", false);
@@ -363,6 +399,26 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 blockCount * BlockVectorStride * 2L)
                 ? sections.BlockVectorsOffset
                 : 0;
+            var kdNodeCount = 0;
+            var kdPartitionsOffset = 0L;
+            var kdNodesOffset = 0L;
+            var kdVectorsOffset = 0L;
+            var kdLabelsOffset = 0L;
+            var kdIdsOffset = 0L;
+            if (useNativeKd &&
+                !TryReadKdTreeSections(
+                    ptr,
+                    sections,
+                    count,
+                    out kdNodeCount,
+                    out kdPartitionsOffset,
+                    out kdNodesOffset,
+                    out kdVectorsOffset,
+                    out kdLabelsOffset,
+                    out kdIdsOffset))
+            {
+                useNativeKd = false;
+            }
 
             return new BinaryIndex(
                 mappedFile,
@@ -389,6 +445,13 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 neighborOrdersOffset,
                 ivfOrdersOffset,
                 blockVectorsOffset,
+                kdNodeCount,
+                kdMaxPartitions,
+                kdPartitionsOffset,
+                kdNodesOffset,
+                kdVectorsOffset,
+                kdLabelsOffset,
+                kdIdsOffset,
                 riskyMappedCount,
                 riskyMappedFineKeyCount,
                 riskyMappedVectorsOffset,
@@ -406,6 +469,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 useRiskyNativeFine,
                 useNativeAnn,
                 useNativeAnnDirect,
+                useNativeKd,
                 useIvfOrder,
                 useMappedSimd,
                 useBlockScan);
@@ -456,6 +520,15 @@ internal unsafe sealed class BinaryIndex : IDisposable
         else if (_neighborOrdersOffset != 0)
         {
             checksum ^= PrefaultRange(_neighborOrdersOffset, Constants.BucketCount * Constants.BucketCount * 2L);
+        }
+
+        if (_useNativeKd)
+        {
+            checksum ^= PrefaultRange(_kdPartitionsOffset, KdPartitionCount * KdPartitionRecordSize);
+            checksum ^= PrefaultRange(_kdNodesOffset, _kdNodeCount * KdNodeRecordSize);
+            checksum ^= PrefaultRange(_kdVectorsOffset, _count * KdVectorStride * 2L);
+            checksum ^= PrefaultRange(_kdLabelsOffset, _count);
+            checksum ^= PrefaultRange(_kdIdsOffset, _count * 4L);
         }
 
         if (HasMappedRisky)
@@ -527,6 +600,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
             return ClassifyFlat(query);
         }
 
+        if (_useNativeKd)
+        {
+            return ClassifyNativeKd(query);
+        }
+
         if (_useNativeAnnDirect && _useNativeAnn && _useMappedSimd && Avx2.IsSupported)
         {
             return ClassifyFraudCountNativeAnnDirect(query, searchParams);
@@ -575,6 +653,27 @@ internal unsafe sealed class BinaryIndex : IDisposable
     }
 
     [SkipLocalsInit]
+    private int ClassifyNativeKd(ReadOnlySpan<short> query)
+    {
+        Span<short> paddedQuery = stackalloc short[KdVectorStride];
+        paddedQuery.Clear();
+        query[..Math.Min(query.Length, Constants.Dim)].CopyTo(paddedQuery);
+
+        fixed (short* queryPtr = paddedQuery)
+        {
+            return NativeClassifyKdTreeAvx2(
+                _ptr + _kdPartitionsOffset,
+                _ptr + _kdNodesOffset,
+                (short*)(_ptr + _kdVectorsOffset),
+                _ptr + _kdLabelsOffset,
+                (int*)(_ptr + _kdIdsOffset),
+                queryPtr,
+                _kdNodeCount,
+                _kdMaxPartitions);
+        }
+    }
+
+    [SkipLocalsInit]
     public ClassificationDiagnostics ClassifyFraudCountWithDiagnostics(ReadOnlySpan<short> query, in SearchParams searchParams)
     {
         var started = Stopwatch.GetTimestamp();
@@ -603,6 +702,18 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 primaryBucket,
                 candidates: 0,
                 fallbackCandidates: flatCandidates,
+                started);
+        }
+
+        if (_useNativeKd)
+        {
+            return Diagnostic(
+                ClassifyNativeKd(query),
+                ClassificationPath.NativeKdTree,
+                profileKey,
+                primaryBucket,
+                candidates: 0,
+                fallbackCandidates: 0,
                 started);
         }
 
@@ -2159,10 +2270,97 @@ internal unsafe sealed class BinaryIndex : IDisposable
                     sections.ProfileFraudCountsOffset = offset;
                     sections.ProfileFraudCountsLength = length;
                     break;
+                case SectionKdMeta:
+                    sections.KdMetaOffset = offset;
+                    sections.KdMetaLength = length;
+                    break;
+                case SectionKdPartitions:
+                    sections.KdPartitionsOffset = offset;
+                    sections.KdPartitionsLength = length;
+                    break;
+                case SectionKdNodes:
+                    sections.KdNodesOffset = offset;
+                    sections.KdNodesLength = length;
+                    break;
+                case SectionKdVectors:
+                    sections.KdVectorsOffset = offset;
+                    sections.KdVectorsLength = length;
+                    break;
+                case SectionKdLabels:
+                    sections.KdLabelsOffset = offset;
+                    sections.KdLabelsLength = length;
+                    break;
+                case SectionKdIds:
+                    sections.KdIdsOffset = offset;
+                    sections.KdIdsLength = length;
+                    break;
             }
         }
 
         return sections;
+    }
+
+    private static bool TryReadKdTreeSections(
+        byte* ptr,
+        in SectionDirectory sections,
+        int expectedVectorCount,
+        out int nodeCount,
+        out long partitionsOffset,
+        out long nodesOffset,
+        out long vectorsOffset,
+        out long labelsOffset,
+        out long idsOffset)
+    {
+        nodeCount = 0;
+        partitionsOffset = 0;
+        nodesOffset = 0;
+        vectorsOffset = 0;
+        labelsOffset = 0;
+        idsOffset = 0;
+
+        if (sections.KdMetaOffset == 0 || sections.KdMetaLength < 64)
+        {
+            return false;
+        }
+
+        var meta = new ReadOnlySpan<byte>(ptr + sections.KdMetaOffset, (int)sections.KdMetaLength);
+        if (!meta[..4].SequenceEqual("KDT1"u8) ||
+            BinaryPrimitives.ReadUInt32LittleEndian(meta[4..]) != 1)
+        {
+            return false;
+        }
+
+        var partitionCount = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(meta[8..]));
+        nodeCount = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(meta[12..]));
+        var vectorCount = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(meta[16..]));
+        var partitionRecordSize = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(meta[24..]));
+        var nodeRecordSize = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(meta[28..]));
+        var vectorStride = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(meta[32..]));
+        if (partitionCount != KdPartitionCount ||
+            nodeCount <= 0 ||
+            vectorCount != expectedVectorCount ||
+            partitionRecordSize != KdPartitionRecordSize ||
+            nodeRecordSize != KdNodeRecordSize ||
+            vectorStride != KdVectorStride)
+        {
+            return false;
+        }
+
+        if (!ValidSection(sections.KdPartitionsOffset, sections.KdPartitionsLength, KdPartitionCount * KdPartitionRecordSize) ||
+            !ValidSection(sections.KdNodesOffset, sections.KdNodesLength, nodeCount * KdNodeRecordSize) ||
+            !ValidSection(sections.KdVectorsOffset, sections.KdVectorsLength, vectorCount * KdVectorStride * 2L) ||
+            !ValidSection(sections.KdLabelsOffset, sections.KdLabelsLength, vectorCount) ||
+            !ValidSection(sections.KdIdsOffset, sections.KdIdsLength, vectorCount * 4L))
+        {
+            return false;
+        }
+
+        partitionsOffset = sections.KdPartitionsOffset;
+        nodesOffset = sections.KdNodesOffset;
+        vectorsOffset = sections.KdVectorsOffset;
+        labelsOffset = sections.KdLabelsOffset;
+        idsOffset = sections.KdIdsOffset;
+        return true;
     }
 
     private static bool TryReadRiskyMappedSections(
@@ -2527,6 +2725,24 @@ internal unsafe sealed class BinaryIndex : IDisposable
         public long IvfOrdersLength;
         public long BlockVectorsOffset;
         public long BlockVectorsLength;
+        public long KdMetaOffset;
+        public long KdMetaLength;
+        public long KdPartitionsOffset;
+        public long KdPartitionsLength;
+        public long KdNodesOffset;
+        public long KdNodesLength;
+        public long KdVectorsOffset;
+        public long KdVectorsLength;
+        public long KdLabelsOffset;
+        public long KdLabelsLength;
+        public long KdIdsOffset;
+        public long KdIdsLength;
+    }
+
+    private static int EnvInt(string name, int fallback)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(value, out var parsed) ? parsed : fallback;
     }
 
     private static bool EnvBool(string name, bool fallback)
@@ -2537,6 +2753,17 @@ internal unsafe sealed class BinaryIndex : IDisposable
 
     [DllImport("libc", EntryPoint = "madvise", SetLastError = true)]
     private static extern int madvise(nint address, nuint length, int advice);
+
+    [DllImport("rinha_native", EntryPoint = "rinha_classify_kdtree_avx2")]
+    private static extern int NativeClassifyKdTreeAvx2(
+        byte* partitions,
+        byte* nodes,
+        short* vectors,
+        byte* labels,
+        int* ids,
+        short* query,
+        int nodeCount,
+        int maxPartitions);
 
     [DllImport("rinha_native", EntryPoint = "rinha_consider_ann_avx2")]
     private static extern int NativeConsiderAnnAvx2(

@@ -4,6 +4,7 @@ obj/
 .vscode/
 TestResults/
 BenchmarkDotNet.Artifacts/
+artifacts/
 .bench-sockets/
 AGENTS.md
 data/*.idx

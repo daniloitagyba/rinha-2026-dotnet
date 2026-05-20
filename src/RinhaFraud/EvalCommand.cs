@@ -401,6 +401,7 @@ internal static class EvalCommand
             ClassificationPath.ParseError => "parse_error",
             ClassificationPath.ProfileFastPath => "profile_fast_path",
             ClassificationPath.AnnBuckets => "ann_buckets",
+            ClassificationPath.NativeKdTree => "native_kdtree",
             ClassificationPath.RiskyFlatFallback => "risky_flat_fallback",
             ClassificationPath.FullFlatFallback => "full_flat_fallback",
             _ => "unknown"

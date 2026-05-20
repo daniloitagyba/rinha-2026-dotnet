@@ -6,6 +6,7 @@ internal enum ClassificationPath
     ParseError = 1,
     ProfileFastPath = 2,
     AnnBuckets = 3,
+    NativeKdTree = 4,
     RiskyFlatFallback = 5,
     FullFlatFallback = 6
 }

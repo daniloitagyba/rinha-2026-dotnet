@@ -34,6 +34,8 @@ param(
     [string]$RiskyNativeFine = $env:RISKY_NATIVE_FINE,
     [string]$NativeAnn = $env:NATIVE_ANN,
     [string]$NativeAnnDirect = $env:NATIVE_ANN_DIRECT,
+    [string]$KdTreeIndex = $env:KDTREE_INDEX,
+    [string]$KdTreeMaxPartitions = $env:KDTREE_MAX_PARTITIONS,
     [string]$BlockScan = $env:BLOCK_SCAN,
     [string]$SocketsMount = $env:SOCKETS_MOUNT,
     [string]$Workers = $env:WORKERS,
@@ -155,6 +157,8 @@ $apiOverrides = [ordered]@{
     "RISKY_NATIVE_FINE" = $RiskyNativeFine
     "NATIVE_ANN" = $NativeAnn
     "NATIVE_ANN_DIRECT" = $NativeAnnDirect
+    "KDTREE_INDEX" = $KdTreeIndex
+    "KDTREE_MAX_PARTITIONS" = $KdTreeMaxPartitions
     "BLOCK_SCAN" = $BlockScan
     "WORKERS" = $Workers
     "FD_RAW" = $FdRaw

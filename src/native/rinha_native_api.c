@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <immintrin.h>
 #include <limits.h>
 #include <pthread.h>
 #include <signal.h>
@@ -27,6 +28,11 @@
 #define PROFILE_KEY_COUNT (1 << 22)
 #define RISKY_STRIDE 16
 #define RISKY_FINE_BUCKET_COUNT (BUCKET_COUNT << 3)
+#define KD_PARTITION_COUNT 256
+#define KD_VECTOR_STRIDE 16
+#define KD_PARTITION_RECORD_SIZE 72
+#define KD_NODE_RECORD_SIZE 80
+#define KD_STACK_SIZE 128
 #define MAX_REQUEST_BYTES 8192
 #define MAX_EVENTS 1024
 
@@ -40,6 +46,12 @@
 #define SECTION_RISKY_COARSE_FINE_OFFSETS 9
 #define SECTION_RISKY_FINE_KEYS 10
 #define SECTION_PROFILE_FRAUD_COUNTS 14
+#define SECTION_KD_META 15
+#define SECTION_KD_PARTITIONS 16
+#define SECTION_KD_NODES 17
+#define SECTION_KD_VECTORS 18
+#define SECTION_KD_LABELS 19
+#define SECTION_KD_IDS 20
 
 #define LEGIT_MASK 1
 #define FRAUD_MASK 2
@@ -92,6 +104,15 @@ typedef struct {
     const int32_t *risky_coarse_offsets;
     const int32_t *risky_fine_keys;
     uint8_t *reference_fastpath;
+    int kd_available;
+    int kd_node_count;
+    int kd_vector_count;
+    int kd_leaf_size;
+    const uint8_t *kd_partitions;
+    const uint8_t *kd_nodes;
+    const int16_t *kd_vectors;
+    const uint8_t *kd_labels;
+    const int32_t *kd_ids;
 } index_t;
 
 typedef struct {
@@ -107,6 +128,8 @@ typedef struct {
     int profile_dominant_max_opposite;
     int keep_alive_requests;
     int fd_immediate_read;
+    int kdtree_index;
+    int kdtree_max_partitions;
 } settings_t;
 
 typedef struct {
@@ -168,6 +191,10 @@ static inline uint32_t rd32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+static inline int32_t rd32s(const uint8_t *p) {
+    return (int32_t)rd32(p);
+}
+
 static inline uint64_t rd64(const uint8_t *p) {
     return (uint64_t)rd32(p) | ((uint64_t)rd32(p + 4) << 32);
 }
@@ -212,6 +239,12 @@ static settings_t load_settings(void) {
     settings.profile_dominant_max_opposite = env_int("PROFILE_DOMINANT_MAX_OPPOSITE", 2);
     settings.keep_alive_requests = env_int("KEEP_ALIVE_REQUESTS", 0);
     settings.fd_immediate_read = env_bool("FD_IMMEDIATE_READ", 0);
+    settings.kdtree_index = env_bool("KDTREE_INDEX", 0);
+    settings.kdtree_max_partitions = env_int("KDTREE_MAX_PARTITIONS", KD_PARTITION_COUNT);
+    if (settings.kdtree_max_partitions <= 0 || settings.kdtree_max_partitions > KD_PARTITION_COUNT) {
+        settings.kdtree_max_partitions = KD_PARTITION_COUNT;
+    }
+
     return settings;
 }
 
@@ -276,6 +309,18 @@ static int open_index(const char *path, index_t *index) {
     uint64_t risky_coarse_offsets_offset = 0;
     uint64_t risky_fine_keys_offset = 0;
     uint64_t risky_fine_key_length = 0;
+    uint64_t kd_meta_offset = 0;
+    uint64_t kd_meta_length = 0;
+    uint64_t kd_partitions_offset = 0;
+    uint64_t kd_partitions_length = 0;
+    uint64_t kd_nodes_offset = 0;
+    uint64_t kd_nodes_length = 0;
+    uint64_t kd_vectors_offset = 0;
+    uint64_t kd_vectors_length = 0;
+    uint64_t kd_labels_offset = 0;
+    uint64_t kd_labels_length = 0;
+    uint64_t kd_ids_offset = 0;
+    uint64_t kd_ids_length = 0;
 
     const uint8_t *directory = base + extension_offset;
     if (memcmp(directory, "R26XDIR1", 8) != 0) {
@@ -335,6 +380,30 @@ static int open_index(const char *path, index_t *index) {
                 risky_fine_keys_offset = offset;
                 risky_fine_key_length = length;
                 break;
+            case SECTION_KD_META:
+                kd_meta_offset = offset;
+                kd_meta_length = length;
+                break;
+            case SECTION_KD_PARTITIONS:
+                kd_partitions_offset = offset;
+                kd_partitions_length = length;
+                break;
+            case SECTION_KD_NODES:
+                kd_nodes_offset = offset;
+                kd_nodes_length = length;
+                break;
+            case SECTION_KD_VECTORS:
+                kd_vectors_offset = offset;
+                kd_vectors_length = length;
+                break;
+            case SECTION_KD_LABELS:
+                kd_labels_offset = offset;
+                kd_labels_length = length;
+                break;
+            case SECTION_KD_IDS:
+                kd_ids_offset = offset;
+                kd_ids_length = length;
+                break;
         }
     }
 
@@ -375,6 +444,43 @@ static int open_index(const char *path, index_t *index) {
         return -1;
     }
 
+    int kd_available = 0;
+    int kd_node_count = 0;
+    int kd_vector_count = 0;
+    int kd_leaf_size = 0;
+    if (kd_meta_offset != 0 &&
+        kd_partitions_offset != 0 &&
+        kd_nodes_offset != 0 &&
+        kd_vectors_offset != 0 &&
+        kd_labels_offset != 0 &&
+        kd_ids_offset != 0 &&
+        kd_meta_length >= 64) {
+        const uint8_t *kd_meta = base + kd_meta_offset;
+        int kd_partition_count = (int)rd32(kd_meta + 8);
+        kd_node_count = (int)rd32(kd_meta + 12);
+        kd_vector_count = (int)rd32(kd_meta + 16);
+        kd_leaf_size = (int)rd32(kd_meta + 20);
+        int kd_partition_record_size = (int)rd32(kd_meta + 24);
+        int kd_node_record_size = (int)rd32(kd_meta + 28);
+        int kd_vector_stride = (int)rd32(kd_meta + 32);
+        if (memcmp(kd_meta, "KDT1", 4) == 0 &&
+            rd32(kd_meta + 4) == 1 &&
+            kd_partition_count == KD_PARTITION_COUNT &&
+            kd_partition_record_size == KD_PARTITION_RECORD_SIZE &&
+            kd_node_record_size == KD_NODE_RECORD_SIZE &&
+            kd_vector_stride == KD_VECTOR_STRIDE &&
+            kd_partitions_length == (uint64_t)KD_PARTITION_COUNT * KD_PARTITION_RECORD_SIZE &&
+            kd_nodes_length == (uint64_t)kd_node_count * KD_NODE_RECORD_SIZE &&
+            kd_vectors_length == (uint64_t)kd_vector_count * KD_VECTOR_STRIDE * 2 &&
+            kd_labels_length == (uint64_t)kd_vector_count &&
+            kd_ids_length == (uint64_t)kd_vector_count * 4 &&
+            kd_vector_count == count) {
+            kd_available = 1;
+        } else {
+            fprintf(stderr, "ignoring invalid kd-tree sections\n");
+        }
+    }
+
     if (env_bool("INDEX_HUGEPAGES", 0)) {
 #ifdef MADV_HUGEPAGE
         (void)madvise(base, file_length, MADV_HUGEPAGE);
@@ -406,6 +512,15 @@ static int open_index(const char *path, index_t *index) {
     index->risky_fine_offsets = (const int32_t *)(base + risky_fine_offsets_offset);
     index->risky_coarse_offsets = (const int32_t *)(base + risky_coarse_offsets_offset);
     index->risky_fine_keys = (const int32_t *)(base + risky_fine_keys_offset);
+    index->kd_available = kd_available;
+    index->kd_node_count = kd_node_count;
+    index->kd_vector_count = kd_vector_count;
+    index->kd_leaf_size = kd_leaf_size;
+    index->kd_partitions = kd_available ? base + kd_partitions_offset : NULL;
+    index->kd_nodes = kd_available ? base + kd_nodes_offset : NULL;
+    index->kd_vectors = kd_available ? (const int16_t *)(base + kd_vectors_offset) : NULL;
+    index->kd_labels = kd_available ? base + kd_labels_offset : NULL;
+    index->kd_ids = kd_available ? (const int32_t *)(base + kd_ids_offset) : NULL;
     return 0;
 }
 
@@ -1361,6 +1476,23 @@ static inline int64_t distance_mapped_scalar(const int16_t *vector, const int16_
     return sum;
 }
 
+static inline int64_t distance_padded_avx2(const int16_t *vector, const int16_t *query) {
+    __m256i v = _mm256_loadu_si256((const __m256i *)vector);
+    __m256i q = _mm256_loadu_si256((const __m256i *)query);
+    __m256i diff = _mm256_sub_epi16(q, v);
+    __m128i diff_low = _mm256_castsi256_si128(diff);
+    __m128i diff_high = _mm256_extracti128_si256(diff, 1);
+    __m256i low32 = _mm256_cvtepi16_epi32(diff_low);
+    __m256i high32 = _mm256_cvtepi16_epi32(diff_high);
+    __m256i low_sq = _mm256_mullo_epi32(low32, low32);
+    __m256i high_sq = _mm256_mullo_epi32(high32, high32);
+    __m256i sum32 = _mm256_add_epi32(low_sq, high_sq);
+    int32_t lanes[8];
+    _mm256_storeu_si256((__m256i *)lanes, sum32);
+    return (int64_t)lanes[0] + lanes[1] + lanes[2] + lanes[3] +
+           lanes[4] + lanes[5] + lanes[6] + lanes[7];
+}
+
 static inline void insert_candidate(int64_t dist, uint8_t label, int64_t *top_dist, uint8_t *top_label) {
     if (dist < top_dist[0]) {
         top_dist[4] = top_dist[3]; top_dist[3] = top_dist[2]; top_dist[2] = top_dist[1]; top_dist[1] = top_dist[0]; top_dist[0] = dist;
@@ -1381,6 +1513,216 @@ static inline void insert_candidate(int64_t dist, uint8_t label, int64_t *top_di
 
 static inline int count_frauds(const uint8_t *top_label) {
     return (int)top_label[0] + (int)top_label[1] + (int)top_label[2] + (int)top_label[3] + (int)top_label[4];
+}
+
+typedef struct {
+    int index;
+    int64_t bound;
+} kd_partition_candidate_t;
+
+static inline int kd_partition_key(const int16_t *v) {
+    int key = v[5] < 0 ? 1 : 0;
+    key |= (v[9] > 0 ? 1 : 0) << 1;
+    key |= (v[10] > 0 ? 1 : 0) << 2;
+    key |= (v[11] > 0 ? 1 : 0) << 3;
+    key |= bucket4(v[12]) << 4;
+    key |= (v[2] >= 8500 ? 1 : 0) << 6;
+    key |= (v[8] >= 4000 ? 1 : 0) << 7;
+    return key;
+}
+
+static inline const uint8_t *kd_partition_ptr(const index_t *index, int partition) {
+    return index->kd_partitions + (int64_t)partition * KD_PARTITION_RECORD_SIZE;
+}
+
+static inline const uint8_t *kd_node_ptr(const index_t *index, int node) {
+    return index->kd_nodes + (int64_t)node * KD_NODE_RECORD_SIZE;
+}
+
+static inline int64_t kd_bounds_lower_bound(const int16_t *q, const int16_t *min, const int16_t *max) {
+    int64_t sum = 0;
+    for (int dim = 0; dim < DIM; dim++) {
+        int64_t d = 0;
+        if (q[dim] < min[dim]) {
+            d = (int64_t)min[dim] - q[dim];
+        } else if (q[dim] > max[dim]) {
+            d = (int64_t)q[dim] - max[dim];
+        }
+
+        sum += d * d;
+    }
+
+    return sum;
+}
+
+static inline int kd_candidate_better(int64_t dist, int32_t id, int position, const int64_t *top_dist, const int32_t *top_id) {
+    return dist < top_dist[position] || (dist == top_dist[position] && id < top_id[position]);
+}
+
+static inline void kd_insert_candidate(
+    int64_t dist,
+    uint8_t label,
+    int32_t id,
+    int64_t *top_dist,
+    uint8_t *top_label,
+    int32_t *top_id) {
+    if (!kd_candidate_better(dist, id, K - 1, top_dist, top_id)) {
+        return;
+    }
+
+    int pos = K - 1;
+    while (pos > 0 && kd_candidate_better(dist, id, pos - 1, top_dist, top_id)) {
+        top_dist[pos] = top_dist[pos - 1];
+        top_label[pos] = top_label[pos - 1];
+        top_id[pos] = top_id[pos - 1];
+        pos--;
+    }
+
+    top_dist[pos] = dist;
+    top_label[pos] = label;
+    top_id[pos] = id;
+}
+
+static void kd_scan_leaf(
+    const index_t *index,
+    const int16_t *q,
+    int start,
+    int count,
+    int64_t *top_dist,
+    uint8_t *top_label,
+    int32_t *top_id) {
+    int end = start + count;
+    for (int pos = start; pos < end; pos++) {
+        int64_t dist = distance_padded_avx2(index->kd_vectors + (int64_t)pos * KD_VECTOR_STRIDE, q);
+        int32_t id = index->kd_ids[pos];
+        if (kd_candidate_better(dist, id, K - 1, top_dist, top_id)) {
+            kd_insert_candidate(dist, index->kd_labels[pos], id, top_dist, top_label, top_id);
+        }
+    }
+}
+
+static void kd_search_node(
+    const index_t *index,
+    const int16_t *q,
+    int root,
+    int64_t *top_dist,
+    uint8_t *top_label,
+    int32_t *top_id) {
+    int stack[KD_STACK_SIZE];
+    int sp = 0;
+    if (root >= 0) {
+        stack[sp++] = root;
+    }
+
+    while (sp > 0) {
+        int node_index = stack[--sp];
+        if (node_index < 0 || node_index >= index->kd_node_count) {
+            continue;
+        }
+
+        const uint8_t *node = kd_node_ptr(index, node_index);
+        const int16_t *min = (const int16_t *)(node + 16);
+        const int16_t *max = (const int16_t *)(node + 48);
+        int64_t bound = kd_bounds_lower_bound(q, min, max);
+        if (bound > top_dist[K - 1]) {
+            continue;
+        }
+
+        int left = rd32s(node);
+        int right = rd32s(node + 4);
+        int start = rd32s(node + 8);
+        int count = rd32s(node + 12);
+        if (left < 0 && right < 0) {
+            kd_scan_leaf(index, q, start, count, top_dist, top_label, top_id);
+            continue;
+        }
+
+        const uint8_t *left_node = left >= 0 ? kd_node_ptr(index, left) : NULL;
+        const uint8_t *right_node = right >= 0 ? kd_node_ptr(index, right) : NULL;
+        int64_t left_bound = left_node != NULL
+            ? kd_bounds_lower_bound(q, (const int16_t *)(left_node + 16), (const int16_t *)(left_node + 48))
+            : INT64_MAX;
+        int64_t right_bound = right_node != NULL
+            ? kd_bounds_lower_bound(q, (const int16_t *)(right_node + 16), (const int16_t *)(right_node + 48))
+            : INT64_MAX;
+
+        if (left_bound <= right_bound) {
+            if (right_bound <= top_dist[K - 1] && sp < KD_STACK_SIZE) stack[sp++] = right;
+            if (left_bound <= top_dist[K - 1] && sp < KD_STACK_SIZE) stack[sp++] = left;
+        } else {
+            if (left_bound <= top_dist[K - 1] && sp < KD_STACK_SIZE) stack[sp++] = left;
+            if (right_bound <= top_dist[K - 1] && sp < KD_STACK_SIZE) stack[sp++] = right;
+        }
+    }
+}
+
+static void kd_insert_partition_candidate(kd_partition_candidate_t *candidates, int *count, int index, int64_t bound) {
+    int pos = *count;
+    while (pos > 0 && bound < candidates[pos - 1].bound) {
+        candidates[pos] = candidates[pos - 1];
+        pos--;
+    }
+
+    candidates[pos].index = index;
+    candidates[pos].bound = bound;
+    *count += 1;
+}
+
+static int classify_kdtree(const index_t *index, const int16_t *q, int max_partitions) {
+    int64_t top_dist[K] = {INT64_MAX, INT64_MAX, INT64_MAX, INT64_MAX, INT64_MAX};
+    uint8_t top_label[K] = {0, 0, 0, 0, 0};
+    int32_t top_id[K] = {INT_MAX, INT_MAX, INT_MAX, INT_MAX, INT_MAX};
+
+    if (max_partitions <= 0 || max_partitions > KD_PARTITION_COUNT) {
+        max_partitions = KD_PARTITION_COUNT;
+    }
+
+    int primary = kd_partition_key(q);
+    const uint8_t *primary_partition = kd_partition_ptr(index, primary);
+    int primary_root = rd32s(primary_partition);
+    if (primary_root >= 0) {
+        kd_search_node(index, q, primary_root, top_dist, top_label, top_id);
+    }
+
+    int searched_partitions = 1;
+    if (searched_partitions >= max_partitions) {
+        return count_frauds(top_label);
+    }
+
+    kd_partition_candidate_t candidates[KD_PARTITION_COUNT];
+    int candidate_count = 0;
+    for (int partition = 0; partition < KD_PARTITION_COUNT; partition++) {
+        if (partition == primary) {
+            continue;
+        }
+
+        const uint8_t *record = kd_partition_ptr(index, partition);
+        int root = rd32s(record);
+        int count = rd32s(record + 4);
+        if (root < 0 || count <= 0) {
+            continue;
+        }
+
+        int64_t bound = kd_bounds_lower_bound(q, (const int16_t *)(record + 8), (const int16_t *)(record + 40));
+        if (bound <= top_dist[K - 1]) {
+            kd_insert_partition_candidate(candidates, &candidate_count, partition, bound);
+        }
+    }
+
+    for (int i = 0; i < candidate_count; i++) {
+        if (candidates[i].bound > top_dist[K - 1]) {
+            break;
+        }
+
+        const uint8_t *record = kd_partition_ptr(index, candidates[i].index);
+        kd_search_node(index, q, rd32s(record), top_dist, top_label, top_id);
+        searched_partitions++;
+        if (searched_partitions >= max_partitions) {
+            break;
+        }
+    }
+
+    return count_frauds(top_label);
 }
 
 static int high_risk_online_fallback(const int16_t *q) {
@@ -1611,6 +1953,10 @@ static int classify(const index_t *index, const settings_t *settings, const int1
 
     if (try_reference_fast_decision(index, q, &fraud_count)) {
         return fraud_count;
+    }
+
+    if (settings->kdtree_index && index->kd_available) {
+        return classify_kdtree(index, q, settings->kdtree_max_partitions);
     }
 
     int64_t top_dist[K] = {INT64_MAX, INT64_MAX, INT64_MAX, INT64_MAX, INT64_MAX};

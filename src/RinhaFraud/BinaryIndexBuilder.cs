@@ -19,6 +19,11 @@ internal static class BinaryIndexBuilder
     private const int ProfileKeyCount = 1 << 22;
     private const int BlockLaneCount = 8;
     private const int BlockVectorStride = Constants.Dim * BlockLaneCount;
+    private const int KdPartitionCount = 256;
+    private const int KdPartitionRecordSize = 72;
+    private const int KdNodeRecordSize = 80;
+    private const int KdVectorStride = 16;
+    private const int KdDefaultLeafSize = 128;
 
     private const uint SectionProfileCounts = 1;
     private const uint SectionProfileMasks = 2;
@@ -34,6 +39,12 @@ internal static class BinaryIndexBuilder
     private const uint SectionIvfOrders = 12;
     private const uint SectionBlockVectors = 13;
     private const uint SectionProfileFraudCounts = 14;
+    private const uint SectionKdMeta = 15;
+    private const uint SectionKdPartitions = 16;
+    private const uint SectionKdNodes = 17;
+    private const uint SectionKdVectors = 18;
+    private const uint SectionKdLabels = 19;
+    private const uint SectionKdIds = 20;
 
     public static void Build(string outputPath, Stream input)
     {
@@ -164,6 +175,11 @@ internal static class BinaryIndexBuilder
         }
 
         WriteRiskySections(output, vectors, labels, orderedOriginalIds, sections, nativeOnly);
+        if (EnvBool("BUILD_KDTREE_INDEX", false))
+        {
+            WriteKdTreeSections(output, vectors, labels, orderedOriginalIds, sections);
+        }
+
         return WriteExtensionDirectory(output, sections);
     }
 
@@ -429,6 +445,248 @@ internal static class BinaryIndexBuilder
         }
     }
 
+    private static void WriteKdTreeSections(
+        FileStream output,
+        ReadOnlySpan<short> vectors,
+        ReadOnlySpan<byte> labels,
+        ReadOnlySpan<uint> orderedOriginalIds,
+        List<SectionEntry> sections)
+    {
+        var leafSize = Math.Max(16, EnvInt("KDTREE_LEAF_SIZE", KdDefaultLeafSize));
+        var vectorArray = vectors.ToArray();
+        var labelArray = labels.ToArray();
+        var orderedIdArray = orderedOriginalIds.ToArray();
+        var partitions = new List<int>[KdPartitionCount];
+        for (var i = 0; i < partitions.Length; i++)
+        {
+            partitions[i] = new List<int>(16_384);
+        }
+
+        for (var mappedId = 0; mappedId < orderedIdArray.Length; mappedId++)
+        {
+            var originalId = (int)orderedIdArray[mappedId];
+            var vector = vectorArray.AsSpan(originalId * Constants.Dim, Constants.Dim);
+            partitions[KdPartitionKey(vector)].Add(mappedId);
+        }
+
+        var nodes = new List<KdNodeRecord>(orderedIdArray.Length / leafSize * 2);
+        var partitionRecords = new KdPartitionRecord[KdPartitionCount];
+        var kdVectors = new List<short>(checked(orderedIdArray.Length * KdVectorStride));
+        var kdLabels = new List<byte>(orderedIdArray.Length);
+        var kdIds = new List<int>(orderedIdArray.Length);
+
+        for (var partitionId = 0; partitionId < partitions.Length; partitionId++)
+        {
+            var ids = partitions[partitionId].ToArray();
+            if (ids.Length == 0)
+            {
+                partitionRecords[partitionId] = KdPartitionRecord.Empty;
+                continue;
+            }
+
+            var root = BuildKdNode(
+                ids,
+                0,
+                ids.Length,
+                leafSize,
+                vectorArray,
+                labelArray,
+                orderedIdArray,
+                nodes,
+                kdVectors,
+                kdLabels,
+                kdIds,
+                out var min,
+                out var max);
+
+            partitionRecords[partitionId] = new KdPartitionRecord(root, ids.Length, min, max);
+        }
+
+        Span<byte> meta = stackalloc byte[64];
+        "KDT1"u8.CopyTo(meta);
+        BinaryPrimitives.WriteUInt32LittleEndian(meta[4..], 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(meta[8..], KdPartitionCount);
+        BinaryPrimitives.WriteUInt32LittleEndian(meta[12..], (uint)nodes.Count);
+        BinaryPrimitives.WriteUInt32LittleEndian(meta[16..], (uint)kdLabels.Count);
+        BinaryPrimitives.WriteUInt32LittleEndian(meta[20..], (uint)leafSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(meta[24..], KdPartitionRecordSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(meta[28..], KdNodeRecordSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(meta[32..], KdVectorStride);
+
+        var partitionBytes = new byte[KdPartitionCount * KdPartitionRecordSize];
+        for (var i = 0; i < partitionRecords.Length; i++)
+        {
+            WriteKdPartitionRecord(partitionBytes.AsSpan(i * KdPartitionRecordSize, KdPartitionRecordSize), partitionRecords[i]);
+        }
+
+        var nodeBytes = new byte[nodes.Count * KdNodeRecordSize];
+        for (var i = 0; i < nodes.Count; i++)
+        {
+            WriteKdNodeRecord(nodeBytes.AsSpan(i * KdNodeRecordSize, KdNodeRecordSize), nodes[i]);
+        }
+
+        WriteSection(output, SectionKdMeta, meta, sections);
+        WriteSection(output, SectionKdPartitions, partitionBytes, sections);
+        WriteSection(output, SectionKdNodes, nodeBytes, sections);
+        WriteSection(output, SectionKdVectors, MemoryMarshal.AsBytes(CollectionsMarshal.AsSpan(kdVectors)), sections);
+        WriteSection(output, SectionKdLabels, CollectionsMarshal.AsSpan(kdLabels), sections);
+        WriteSection(output, SectionKdIds, MemoryMarshal.AsBytes(CollectionsMarshal.AsSpan(kdIds)), sections);
+    }
+
+    private static int BuildKdNode(
+        int[] mappedIds,
+        int start,
+        int count,
+        int leafSize,
+        short[] vectors,
+        byte[] labels,
+        uint[] orderedOriginalIds,
+        List<KdNodeRecord> nodes,
+        List<short> kdVectors,
+        List<byte> kdLabels,
+        List<int> kdIds,
+        out short[] min,
+        out short[] max)
+    {
+        min = new short[KdVectorStride];
+        max = new short[KdVectorStride];
+        Array.Fill(min, short.MaxValue);
+        Array.Fill(max, short.MinValue);
+
+        for (var i = start; i < start + count; i++)
+        {
+            var originalId = (int)orderedOriginalIds[mappedIds[i]];
+            var source = vectors.AsSpan(originalId * Constants.Dim, Constants.Dim);
+            for (var dim = 0; dim < Constants.Dim; dim++)
+            {
+                var value = source[dim];
+                if (value < min[dim])
+                {
+                    min[dim] = value;
+                }
+
+                if (value > max[dim])
+                {
+                    max[dim] = value;
+                }
+            }
+        }
+
+        var nodeIndex = nodes.Count;
+        nodes.Add(default);
+
+        if (count <= leafSize)
+        {
+            var vectorStart = kdLabels.Count;
+            for (var i = start; i < start + count; i++)
+            {
+                var mappedId = mappedIds[i];
+                var originalId = (int)orderedOriginalIds[mappedId];
+                var source = vectors.AsSpan(originalId * Constants.Dim, Constants.Dim);
+                for (var dim = 0; dim < Constants.Dim; dim++)
+                {
+                    kdVectors.Add(source[dim]);
+                }
+
+                for (var dim = Constants.Dim; dim < KdVectorStride; dim++)
+                {
+                    kdVectors.Add(0);
+                }
+
+                kdLabels.Add(labels[originalId]);
+                kdIds.Add(mappedId);
+            }
+
+            nodes[nodeIndex] = new KdNodeRecord(-1, -1, vectorStart, count, min, max);
+            return nodeIndex;
+        }
+
+        var axis = 0;
+        var range = -1;
+        for (var dim = 0; dim < Constants.Dim; dim++)
+        {
+            var dimRange = max[dim] - min[dim];
+            if (dimRange > range)
+            {
+                range = dimRange;
+                axis = dim;
+            }
+        }
+
+        Array.Sort(mappedIds, start, count, new KdMappedIdComparer(vectors, orderedOriginalIds, axis));
+        var leftCount = count / 2;
+        var rightCount = count - leftCount;
+        var left = BuildKdNode(
+            mappedIds,
+            start,
+            leftCount,
+            leafSize,
+            vectors,
+            labels,
+            orderedOriginalIds,
+            nodes,
+            kdVectors,
+            kdLabels,
+            kdIds,
+            out _,
+            out _);
+        var right = BuildKdNode(
+            mappedIds,
+            start + leftCount,
+            rightCount,
+            leafSize,
+            vectors,
+            labels,
+            orderedOriginalIds,
+            nodes,
+            kdVectors,
+            kdLabels,
+            kdIds,
+            out _,
+            out _);
+
+        nodes[nodeIndex] = new KdNodeRecord(left, right, 0, 0, min, max);
+        return nodeIndex;
+    }
+
+    private static void WriteKdPartitionRecord(Span<byte> destination, in KdPartitionRecord record)
+    {
+        BinaryPrimitives.WriteInt32LittleEndian(destination, record.Root);
+        BinaryPrimitives.WriteInt32LittleEndian(destination[4..], record.Count);
+        WriteKdBounds(destination[8..], record.Min);
+        WriteKdBounds(destination[40..], record.Max);
+    }
+
+    private static void WriteKdNodeRecord(Span<byte> destination, in KdNodeRecord record)
+    {
+        BinaryPrimitives.WriteInt32LittleEndian(destination, record.Left);
+        BinaryPrimitives.WriteInt32LittleEndian(destination[4..], record.Right);
+        BinaryPrimitives.WriteInt32LittleEndian(destination[8..], record.Start);
+        BinaryPrimitives.WriteInt32LittleEndian(destination[12..], record.Count);
+        WriteKdBounds(destination[16..], record.Min);
+        WriteKdBounds(destination[48..], record.Max);
+    }
+
+    private static void WriteKdBounds(Span<byte> destination, short[] values)
+    {
+        for (var dim = 0; dim < KdVectorStride; dim++)
+        {
+            BinaryPrimitives.WriteInt16LittleEndian(destination[(dim * 2)..], values[dim]);
+        }
+    }
+
+    private static int KdPartitionKey(ReadOnlySpan<short> vector)
+    {
+        var key = vector[5] < 0 ? 1 : 0;
+        key |= (vector[9] > 0 ? 1 : 0) << 1;
+        key |= (vector[10] > 0 ? 1 : 0) << 2;
+        key |= (vector[11] > 0 ? 1 : 0) << 3;
+        key |= Vectorizer.Bucket4(vector[12]) << 4;
+        key |= (vector[2] >= 8500 ? 1 : 0) << 6;
+        key |= (vector[8] >= 4000 ? 1 : 0) << 7;
+        return key;
+    }
+
     private static void WriteSection(FileStream output, uint type, ReadOnlySpan<byte> data, List<SectionEntry> sections)
     {
         var offset = output.Position;
@@ -514,6 +772,12 @@ internal static class BinaryIndexBuilder
                value.Equals("yes", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static int EnvInt(string name, int fallback)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(value, out var parsed) ? parsed : fallback;
+    }
+
     private static bool IsRiskyFallbackReference(ReadOnlySpan<short> vector, in RiskyFallbackFilter filter)
     {
         return vector[0] >= filter.AmountMin && vector[0] <= filter.AmountMax &&
@@ -562,6 +826,68 @@ internal static class BinaryIndexBuilder
         var min = bucket == 0 ? 0 : (bucket * (Constants.Scale + 1) + divisions - 1) / divisions;
         var max = bucket == divisions - 1 ? Constants.Scale : (((bucket + 1) * (Constants.Scale + 1)) - 1) / divisions;
         return (short)((min + max) / 2);
+    }
+
+    private readonly struct KdPartitionRecord
+    {
+        public static readonly KdPartitionRecord Empty = new(-1, 0, new short[KdVectorStride], new short[KdVectorStride]);
+
+        public readonly int Root;
+        public readonly int Count;
+        public readonly short[] Min;
+        public readonly short[] Max;
+
+        public KdPartitionRecord(int root, int count, short[] min, short[] max)
+        {
+            Root = root;
+            Count = count;
+            Min = min;
+            Max = max;
+        }
+    }
+
+    private readonly struct KdNodeRecord
+    {
+        public readonly int Left;
+        public readonly int Right;
+        public readonly int Start;
+        public readonly int Count;
+        public readonly short[] Min;
+        public readonly short[] Max;
+
+        public KdNodeRecord(int left, int right, int start, int count, short[] min, short[] max)
+        {
+            Left = left;
+            Right = right;
+            Start = start;
+            Count = count;
+            Min = min;
+            Max = max;
+        }
+    }
+
+    private sealed class KdMappedIdComparer : IComparer<int>
+    {
+        private readonly short[] _vectors;
+        private readonly uint[] _orderedOriginalIds;
+        private readonly int _axis;
+
+        public KdMappedIdComparer(short[] vectors, uint[] orderedOriginalIds, int axis)
+        {
+            _vectors = vectors;
+            _orderedOriginalIds = orderedOriginalIds;
+            _axis = axis;
+        }
+
+        public int Compare(int left, int right)
+        {
+            var leftOriginal = (int)_orderedOriginalIds[left];
+            var rightOriginal = (int)_orderedOriginalIds[right];
+            var leftValue = _vectors[(leftOriginal * Constants.Dim) + _axis];
+            var rightValue = _vectors[(rightOriginal * Constants.Dim) + _axis];
+            var valueComparison = leftValue.CompareTo(rightValue);
+            return valueComparison != 0 ? valueComparison : left.CompareTo(right);
+        }
     }
 
     private readonly struct SectionEntry

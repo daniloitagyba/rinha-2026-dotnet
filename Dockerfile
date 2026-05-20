@@ -5,8 +5,6 @@ WORKDIR /src
 COPY . .
 
 ARG TARGETARCH
-ARG BUILD_BLOCK_INDEX=0
-ARG BUILD_NATIVE_ONLY_INDEX=1
 RUN case "$TARGETARCH" in \
       amd64) RID=linux-x64 ;; \
       arm64) RID=linux-arm64 ;; \
@@ -19,15 +17,19 @@ RUN mkdir -p /out/native \
     && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -fPIC -shared -o /out/native/librinha_native.so src/native/rinha_native.c
 RUN mkdir -p /out/native-api \
     && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -pthread -o /out/native-api/rinha-native-api src/native/rinha_native_api.c src/native/rinha_native.c
+ARG BUILD_BLOCK_INDEX=0
+ARG BUILD_NATIVE_ONLY_INDEX=1
+ARG BUILD_KDTREE_INDEX=1
+ARG KDTREE_LEAF_SIZE=128
 RUN mkdir -p /out/data \
     && if [ -f resources/references.json.gz ]; then \
-         gzip -dc resources/references.json.gz | BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" BUILD_NATIVE_ONLY_INDEX="$BUILD_NATIVE_ONLY_INDEX" /out/app/RinhaFraud build-index /out/data/references.idx ; \
+         gzip -dc resources/references.json.gz | BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" BUILD_NATIVE_ONLY_INDEX="$BUILD_NATIVE_ONLY_INDEX" BUILD_KDTREE_INDEX="$BUILD_KDTREE_INDEX" KDTREE_LEAF_SIZE="$KDTREE_LEAF_SIZE" /out/app/RinhaFraud build-index /out/data/references.idx ; \
        elif [ -f data/references.idx ]; then \
          cp data/references.idx /out/data/references.idx ; \
        else \
          curl -fsSL https://raw.githubusercontent.com/zanfranceschi/rinha-de-backend-2026/main/resources/references.json.gz \
            | gzip -dc \
-           | BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" BUILD_NATIVE_ONLY_INDEX="$BUILD_NATIVE_ONLY_INDEX" /out/app/RinhaFraud build-index /out/data/references.idx ; \
+           | BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" BUILD_NATIVE_ONLY_INDEX="$BUILD_NATIVE_ONLY_INDEX" BUILD_KDTREE_INDEX="$BUILD_KDTREE_INDEX" KDTREE_LEAF_SIZE="$KDTREE_LEAF_SIZE" /out/app/RinhaFraud build-index /out/data/references.idx ; \
        fi \
     && test -s /out/data/references.idx
 
@@ -54,6 +56,7 @@ ENV PROFILE_MIN_COUNT=15
 ENV PROFILE_LEGIT_MIN_COUNT=5
 ENV PROFILE_FRAUD_MIN_COUNT=15
 ENV EXACT_FALLBACK=risky
+ENV KDTREE_INDEX=1
 
 EXPOSE 8080
 ENTRYPOINT ["rinha-fraud", "serve"]

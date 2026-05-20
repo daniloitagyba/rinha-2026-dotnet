@@ -131,6 +131,8 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${RISKY_NATIVE_FINE:-}" ] || \
    [ -n "${NATIVE_ANN:-}" ] || \
    [ -n "${NATIVE_ANN_DIRECT:-}" ] || \
+   [ -n "${KDTREE_INDEX:-}" ] || \
+   [ -n "${KDTREE_MAX_PARTITIONS:-}" ] || \
    [ -n "${BLOCK_SCAN:-}" ] || \
    [ -n "${SOCKETS_MOUNT:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
@@ -241,6 +243,8 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${RISKY_NATIVE_FINE:-}" ] && echo "      RISKY_NATIVE_FINE: \"$RISKY_NATIVE_FINE\""
       [ -n "${NATIVE_ANN:-}" ] && echo "      NATIVE_ANN: \"$NATIVE_ANN\""
       [ -n "${NATIVE_ANN_DIRECT:-}" ] && echo "      NATIVE_ANN_DIRECT: \"$NATIVE_ANN_DIRECT\""
+      [ -n "${KDTREE_INDEX:-}" ] && echo "      KDTREE_INDEX: \"$KDTREE_INDEX\""
+      [ -n "${KDTREE_MAX_PARTITIONS:-}" ] && echo "      KDTREE_MAX_PARTITIONS: \"$KDTREE_MAX_PARTITIONS\""
       [ -n "${BLOCK_SCAN:-}" ] && echo "      BLOCK_SCAN: \"$BLOCK_SCAN\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
       [ -n "${FD_RECEIVERS:-}" ] && echo "      FD_RECEIVERS: \"$FD_RECEIVERS\""

@@ -1,6 +1,6 @@
 services:
   lb:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:3ca56f086db5871178e732b6c9eadebc5545059f
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:f42dd888c69f1c4e28fe4a970ba4361cbbdaed48
     platform: linux/amd64
     entrypoint: ["rinha-lb"]
     environment:
@@ -21,13 +21,13 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.10"
+          cpus: "0.12"
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:3ca56f086db5871178e732b6c9eadebc5545059f
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:f42dd888c69f1c4e28fe4a970ba4361cbbdaed48
     platform: linux/amd64
-    entrypoint: ["rinha-native-api"]
+    entrypoint: ["rinha-fraud", "serve"]
     environment:
       BIND_ADDR: fd:/sockets/api1.sock.ctrl
       INDEX_PATH: /app/data/references.idx
@@ -61,6 +61,8 @@ services:
       RISKY_NATIVE_FINE: "1"
       NATIVE_ANN: "1"
       KDTREE_INDEX: "1"
+      KDTREE_NATIVE: "1"
+      DOTNET_EnableDiagnostics: "0"
     volumes:
       - backend-sockets:/sockets
     security_opt:
@@ -72,13 +74,13 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.44"
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:3ca56f086db5871178e732b6c9eadebc5545059f
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:f42dd888c69f1c4e28fe4a970ba4361cbbdaed48
     platform: linux/amd64
-    entrypoint: ["rinha-native-api"]
+    entrypoint: ["rinha-fraud", "serve"]
     environment:
       BIND_ADDR: fd:/sockets/api2.sock.ctrl
       INDEX_PATH: /app/data/references.idx
@@ -112,6 +114,8 @@ services:
       RISKY_NATIVE_FINE: "1"
       NATIVE_ANN: "1"
       KDTREE_INDEX: "1"
+      KDTREE_NATIVE: "1"
+      DOTNET_EnableDiagnostics: "0"
     volumes:
       - backend-sockets:/sockets
     security_opt:
@@ -123,7 +127,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.44"
           memory: "156MB"
 
 volumes:

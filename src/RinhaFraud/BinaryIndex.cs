@@ -655,6 +655,22 @@ internal unsafe sealed class BinaryIndex : IDisposable
     [SkipLocalsInit]
     private int ClassifyNativeKd(ReadOnlySpan<short> query)
     {
+        if (query.Length >= KdVectorStride)
+        {
+            fixed (short* queryPtr = query)
+            {
+                return NativeClassifyKdTreeAvx2(
+                    _ptr + _kdPartitionsOffset,
+                    _ptr + _kdNodesOffset,
+                    (short*)(_ptr + _kdVectorsOffset),
+                    _ptr + _kdLabelsOffset,
+                    (int*)(_ptr + _kdIdsOffset),
+                    queryPtr,
+                    _kdNodeCount,
+                    _kdMaxPartitions);
+            }
+        }
+
         Span<short> paddedQuery = stackalloc short[KdVectorStride];
         paddedQuery.Clear();
         query[..Math.Min(query.Length, Constants.Dim)].CopyTo(paddedQuery);

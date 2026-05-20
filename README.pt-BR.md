@@ -4,38 +4,28 @@
 
 Submissao da Rinha de Backend 2026 para score de fraude.
 
-Este repositorio hoje e uma implementacao hibrida .NET/C. O projeto .NET ainda
-controla o pipeline do modelo, o pre-processamento das referencias, os
-diagnosticos, o self-test e o eval offline. O caminho publicado que atende o
-benchmark roda em binarios C nativos.
-
-## Resultado Atual
-
-Execucao oficial publicada:
-
-- issue: `#5616`
-- p99: `0.98ms`
-- score final: `6000`
-- falsos positivos: `0`
-- falsos negativos: `0`
-- erros HTTP: `0`
+Este repositorio e uma implementacao hibrida .NET/C. O runtime submetido mantem
+o processo da API em .NET 10 Native AOT e chama um classificador KD-tree nativo
+em C via P/Invoke para a busca critica de vizinhos mais proximos.
 
 ## Arquitetura
 
-A imagem competitiva contem tres binarios principais:
+A imagem competitiva contem tres componentes principais de runtime:
 
-- `rinha-fraud`: CLI em .NET 10 Native AOT usado para `build-index`, `eval`,
-  `self-test` e como servidor reserva
+- `rinha-fraud`: CLI e servidor HTTP em .NET 10 Native AOT usado pelos servicos
+  `api1` e `api2` submetidos
 - `rinha-lb`: load balancer TCP em C
-- `rinha-native-api`: API em C usada por `api1` e `api2` no compose submetido
+- `librinha_native.so`: classificador nativo em C carregado pelo servidor .NET
+  via P/Invoke
 
 Topologia em runtime:
 
 - `lb` escuta na porta `9999`
 - `lb` usa fd handoff por Unix sockets para distribuir conexoes TCP aceitas
-- `api1` e `api2` executam `rinha-native-api`
+- `api1` e `api2` executam `rinha-fraud serve`
 - o indice binario de referencias fica embutido na imagem Docker
-- `KDTREE_INDEX=1` ativa o caminho atual de busca exata por KD-tree
+- `KDTREE_NATIVE=1` ativa a busca exata por KD-tree nativa dentro do processo
+  da API .NET
 
 Para trafego de fraude, o load balancer apenas aceita e distribui conexoes. Ele
 nao classifica transacoes e nao usa dados do payload relacionados a fraude. A
@@ -48,13 +38,15 @@ O .NET ainda e o nucleo organizador do repositorio:
 - gera o indice a partir de `references.json.gz`
 - escreve o binario `references.idx`
 - mantem comandos de self-test e eval offline
-- preserva o classificador, parser, vetorizador e diagnosticos originais em C#
+- roda o processo HTTP submetido
+- mantem parser, vetorizador, integracao do classificador e diagnosticos em C#
 - conduz o build Docker via `dotnet publish` com Native AOT
 
-O runtime vencedor atual nao e uma API .NET pura. A descricao mais correta e:
+O runtime atual nao e uma implementacao puramente gerenciada. A descricao mais
+correta e:
 
 ```text
-pipeline .NET 10 Native AOT + hot path nativo em C
+API .NET 10 Native AOT + classificador KD-tree nativo em C
 ```
 
 ## Classificacao
@@ -84,7 +76,8 @@ Resposta de classificacao:
 
 - indice binario pre-processado dentro da imagem Docker
 - busca exata por KD-tree particionado no baseline publico atual
-- API nativa em C para o hot path do benchmark
+- API .NET Native AOT para o hot path submetido
+- busca KD-tree nativa em C chamada via P/Invoke
 - load balancer TCP em C com fd handoff
 - respostas JSON pre-montadas para todos os valores possiveis de `fraud_score`
 - logica de profile e fallback risky mantida como caminhos validados
@@ -92,8 +85,8 @@ Resposta de classificacao:
 
 ## Estrutura
 
-- `src/RinhaFraud/`: CLI .NET, builder do indice, eval, self-test e classificador original
-- `src/native/`: API nativa e runtime nativo de classificacao/busca
+- `src/RinhaFraud/`: API .NET, CLI, builder do indice, eval, self-test e integracao do classificador
+- `src/native/`: runtime nativo de classificacao/busca e API nativa alternativa
 - `src/lb/`: load balancer TCP
 - `scripts/`: scripts locais de build, validacao, release e carga
 - `resources/`: referencias usadas para montar o indice binario
@@ -107,7 +100,8 @@ Variaveis principais de runtime:
 
 - `BIND_ADDR`: endereco de escuta ou fd handoff
 - `INDEX_PATH`: caminho do indice binario
-- `KDTREE_INDEX`: habilita as secoes KD-tree no runtime nativo
+- `KDTREE_INDEX`: habilita as secoes KD-tree no runtime da API nativa
+- `KDTREE_NATIVE`: habilita a busca KD-tree pela biblioteca nativa a partir do .NET
 - `WORKERS`: quantidade de workers por instancia de API
 - `EARLY_CANDIDATES`, `MIN_CANDIDATES`, `MAX_CANDIDATES`: limites de busca para caminhos sem KD
 - `PROFILE_FASTPATH`: habilita o fast path por perfil

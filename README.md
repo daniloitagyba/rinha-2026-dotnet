@@ -4,38 +4,28 @@
 
 Rinha de Backend 2026 fraud-scoring submission.
 
-This repository is now a hybrid .NET/C implementation. The .NET project still
-owns the model pipeline, reference preprocessing, diagnostics, self-test, and
-offline evaluation. The published hot path that serves benchmark traffic runs
-through native C binaries.
-
-## Current Result
-
-Published official run:
-
-- issue: `#5616`
-- p99: `0.98ms`
-- final score: `6000`
-- false positives: `0`
-- false negatives: `0`
-- HTTP errors: `0`
+This repository is a hybrid .NET/C implementation. The submitted runtime keeps
+the API process in .NET 10 Native AOT and calls a native C KD-tree classifier
+through P/Invoke for the critical nearest-neighbor search.
 
 ## Architecture
 
-The competitive Docker image contains three main binaries:
+The competitive Docker image contains three main runtime components:
 
-- `rinha-fraud`: .NET 10 Native AOT CLI used for `build-index`, `eval`,
-  `self-test`, and as a fallback server
+- `rinha-fraud`: .NET 10 Native AOT CLI and HTTP server used by the submitted
+  `api1` and `api2` services
 - `rinha-lb`: C TCP load balancer
-- `rinha-native-api`: C API used by `api1` and `api2` in the submitted compose
+- `librinha_native.so`: C native classifier loaded by the .NET server through
+  P/Invoke
 
 Runtime topology:
 
 - `lb` listens on port `9999`
 - `lb` uses fd handoff over Unix sockets to distribute accepted TCP connections
-- `api1` and `api2` run `rinha-native-api`
+- `api1` and `api2` run `rinha-fraud serve`
 - the binary reference index is embedded in the Docker image
-- `KDTREE_INDEX=1` enables the current exact KD-tree search path
+- `KDTREE_NATIVE=1` enables the native exact KD-tree search path inside the
+  .NET API process
 
 For fraud traffic, the load balancer only accepts and distributes connections.
 It does not classify transactions and does not use fraud-related payload data.
@@ -48,13 +38,15 @@ Classification happens in the API process.
 - builds the reference index from `references.json.gz`
 - writes the binary `references.idx`
 - owns self-test and offline evaluation commands
-- keeps the original C# classifier, parser, vectorizer, and diagnostic code
+- runs the submitted HTTP API process
+- keeps the parser, vectorizer, classifier integration, and diagnostics in C#
 - drives the Docker build through `dotnet publish` with Native AOT
 
-The current runtime winner is not a pure .NET API. It is better described as:
+The current architecture is not a pure managed implementation. It is better
+described as:
 
 ```text
-.NET 10 Native AOT pipeline + C native hot path
+.NET 10 Native AOT API + C native KD-tree classifier
 ```
 
 ## Classification
@@ -84,7 +76,8 @@ Classification response:
 
 - preprocessed binary index in the Docker image
 - exact partitioned KD-tree search for the current public baseline
-- native C API for the benchmark hot path
+- .NET Native AOT API for the submitted hot path
+- native C KD-tree search called through P/Invoke
 - C TCP load balancer using fd handoff
 - prebuilt JSON responses for every possible `fraud_score`
 - profile and risky fallback logic retained as validated paths
@@ -92,8 +85,8 @@ Classification response:
 
 ## Structure
 
-- `src/RinhaFraud/`: .NET CLI, index builder, eval, self-test, and original classifier
-- `src/native/`: native API and native classifier/search runtime
+- `src/RinhaFraud/`: .NET API, CLI, index builder, eval, self-test, and classifier integration
+- `src/native/`: native classifier/search runtime and alternate native API
 - `src/lb/`: TCP load balancer
 - `scripts/`: local build, validation, release, and load scripts
 - `resources/`: references used to build the binary index
@@ -107,7 +100,8 @@ Main runtime variables:
 
 - `BIND_ADDR`: listen or fd-handoff address
 - `INDEX_PATH`: binary index path
-- `KDTREE_INDEX`: enables KD-tree sections in the native runtime
+- `KDTREE_INDEX`: enables KD-tree sections in the native API runtime
+- `KDTREE_NATIVE`: enables KD-tree search through the native library from .NET
 - `WORKERS`: worker count per API instance
 - `EARLY_CANDIDATES`, `MIN_CANDIDATES`, `MAX_CANDIDATES`: search limits for non-KD paths
 - `PROFILE_FASTPATH`: enables the profile fast path

@@ -31,24 +31,6 @@ Para trafego de fraude, o load balancer apenas aceita e distribui conexoes. Ele
 nao classifica transacoes e nao usa dados do payload relacionados a fraude. A
 classificacao acontece no processo da API.
 
-## Papel Do .NET
-
-O .NET ainda e o nucleo organizador do repositorio:
-
-- gera o indice a partir de `references.json.gz`
-- escreve o binario `references.idx`
-- mantem comandos de self-test e eval offline
-- roda o processo HTTP submetido
-- mantem parser, vetorizador, integracao do classificador e diagnosticos em C#
-- conduz o build Docker via `dotnet publish` com Native AOT
-
-O runtime atual nao e uma implementacao puramente gerenciada. A descricao mais
-correta e:
-
-```text
-API .NET 10 Native AOT + classificador KD-tree nativo em C
-```
-
 ## Classificacao
 
 O payload e convertido em um vetor quantizado. A API busca os 5 vizinhos mais
@@ -86,7 +68,7 @@ Resposta de classificacao:
 ## Estrutura
 
 - `src/RinhaFraud/`: API .NET, CLI, builder do indice, eval, self-test e integracao do classificador
-- `src/native/`: runtime nativo de classificacao/busca e API nativa alternativa
+- `src/native/`: runtime nativo de classificacao/busca
 - `src/lb/`: load balancer TCP
 - `scripts/`: scripts locais de build, validacao, release e carga
 - `resources/`: referencias usadas para montar o indice binario
@@ -100,7 +82,6 @@ Variaveis principais de runtime:
 
 - `BIND_ADDR`: endereco de escuta ou fd handoff
 - `INDEX_PATH`: caminho do indice binario
-- `KDTREE_INDEX`: habilita as secoes KD-tree no runtime da API nativa
 - `KDTREE_NATIVE`: habilita a busca KD-tree pela biblioteca nativa a partir do .NET
 - `WORKERS`: quantidade de workers por instancia de API
 - `EARLY_CANDIDATES`, `MIN_CANDIDATES`, `MAX_CANDIDATES`: limites de busca para caminhos sem KD

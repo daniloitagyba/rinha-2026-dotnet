@@ -31,24 +31,6 @@ For fraud traffic, the load balancer only accepts and distributes connections.
 It does not classify transactions and does not use fraud-related payload data.
 Classification happens in the API process.
 
-## .NET Role
-
-.NET is still the organizing core of the repository:
-
-- builds the reference index from `references.json.gz`
-- writes the binary `references.idx`
-- owns self-test and offline evaluation commands
-- runs the submitted HTTP API process
-- keeps the parser, vectorizer, classifier integration, and diagnostics in C#
-- drives the Docker build through `dotnet publish` with Native AOT
-
-The current architecture is not a pure managed implementation. It is better
-described as:
-
-```text
-.NET 10 Native AOT API + C native KD-tree classifier
-```
-
 ## Classification
 
 The payload is converted into a quantized vector. The API searches for the 5
@@ -86,7 +68,7 @@ Classification response:
 ## Structure
 
 - `src/RinhaFraud/`: .NET API, CLI, index builder, eval, self-test, and classifier integration
-- `src/native/`: native classifier/search runtime and alternate native API
+- `src/native/`: native classifier/search runtime
 - `src/lb/`: TCP load balancer
 - `scripts/`: local build, validation, release, and load scripts
 - `resources/`: references used to build the binary index
@@ -100,7 +82,6 @@ Main runtime variables:
 
 - `BIND_ADDR`: listen or fd-handoff address
 - `INDEX_PATH`: binary index path
-- `KDTREE_INDEX`: enables KD-tree sections in the native API runtime
 - `KDTREE_NATIVE`: enables KD-tree search through the native library from .NET
 - `WORKERS`: worker count per API instance
 - `EARLY_CANDIDATES`, `MIN_CANDIDATES`, `MAX_CANDIDATES`: search limits for non-KD paths

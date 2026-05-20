@@ -1,6 +1,6 @@
 services:
   lb:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:latest
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:latest
     platform: linux/amd64
     cpuset: "0,2"
     build:
@@ -33,10 +33,10 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:latest
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:latest
     platform: linux/amd64
     cpuset: "0,1"
-    entrypoint: ["rinha-native-api"]
+    entrypoint: ["rinha-fraud", "serve"]
     build:
       context: .
       args:
@@ -50,6 +50,8 @@ services:
       INDEX_HUGEPAGES: "1"
       SERVER_MODE: raw
       FD_RAW: "1"
+      KDTREE_NATIVE: "1"
+      DOTNET_EnableDiagnostics: "0"
       TP_MIN_THREADS: "64"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
@@ -75,8 +77,6 @@ services:
       RISKY_TX24H_MAX: "5800"
       RISKY_MERCHANT_AVG_MAX: "420"
       RISKY_NATIVE_FINE: "1"
-      NATIVE_ANN: "1"
-      KDTREE_INDEX: "1"
     volumes:
       - backend-sockets:/sockets
     security_opt:
@@ -92,10 +92,10 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet:latest
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:latest
     platform: linux/amd64
     cpuset: "2,3"
-    entrypoint: ["rinha-native-api"]
+    entrypoint: ["rinha-fraud", "serve"]
     build:
       context: .
       args:
@@ -109,6 +109,8 @@ services:
       INDEX_HUGEPAGES: "1"
       SERVER_MODE: raw
       FD_RAW: "1"
+      KDTREE_NATIVE: "1"
+      DOTNET_EnableDiagnostics: "0"
       TP_MIN_THREADS: "64"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
@@ -134,8 +136,6 @@ services:
       RISKY_TX24H_MAX: "5800"
       RISKY_MERCHANT_AVG_MAX: "420"
       RISKY_NATIVE_FINE: "1"
-      NATIVE_ANN: "1"
-      KDTREE_INDEX: "1"
     volumes:
       - backend-sockets:/sockets
     security_opt:

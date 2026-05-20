@@ -9,7 +9,6 @@
 AGENTS.md
 README.md
 info.json
-haproxy.cfg
 docker-compose*.yml
 submission/
 scripts/

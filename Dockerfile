@@ -15,8 +15,6 @@ RUN mkdir -p /out/lb \
     && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -pthread -o /out/lb/rinha-lb src/lb/rinha-lb.c
 RUN mkdir -p /out/native \
     && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -fPIC -shared -o /out/native/librinha_native.so src/native/rinha_native.c
-RUN mkdir -p /out/native-api \
-    && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -pthread -o /out/native-api/rinha-native-api src/native/rinha_native_api.c src/native/rinha_native.c
 ARG BUILD_BLOCK_INDEX=0
 ARG BUILD_NATIVE_ONLY_INDEX=1
 ARG BUILD_KDTREE_INDEX=1
@@ -38,7 +36,6 @@ FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble
 WORKDIR /app
 COPY --from=builder /out/app/RinhaFraud /usr/local/bin/rinha-fraud
 COPY --from=builder /out/lb/rinha-lb /usr/local/bin/rinha-lb
-COPY --from=builder /out/native-api/rinha-native-api /usr/local/bin/rinha-native-api
 COPY --from=builder /out/native/librinha_native.so /usr/local/lib/librinha_native.so
 COPY --from=builder /out/data /app/data
 
@@ -56,7 +53,7 @@ ENV PROFILE_MIN_COUNT=15
 ENV PROFILE_LEGIT_MIN_COUNT=5
 ENV PROFILE_FRAUD_MIN_COUNT=15
 ENV EXACT_FALLBACK=risky
-ENV KDTREE_INDEX=1
+ENV KDTREE_NATIVE=1
 
 EXPOSE 8080
 ENTRYPOINT ["rinha-fraud", "serve"]

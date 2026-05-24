@@ -62,7 +62,8 @@ Classification response:
 - native C KD-tree search called through P/Invoke
 - C TCP load balancer using fd handoff
 - prebuilt JSON responses for every possible `fraud_score`
-- profile and risky fallback logic retained as validated paths
+- KD-tree search used as the accuracy path for submitted requests
+- profile and risky fallback logic retained for controlled experiments
 - no payload lookup table and no fraud logic in the load balancer
 
 ## Structure

@@ -62,7 +62,8 @@ Resposta de classificacao:
 - busca KD-tree nativa em C chamada via P/Invoke
 - load balancer TCP em C com fd handoff
 - respostas JSON pre-montadas para todos os valores possiveis de `fraud_score`
-- logica de profile e fallback risky mantida como caminhos validados
+- busca KD-tree usada como caminho de acuracia para requisicoes submetidas
+- logica de profile e fallback risky mantida para experimentos controlados
 - sem tabela de lookup por payload e sem logica de fraude no load balancer
 
 ## Estrutura

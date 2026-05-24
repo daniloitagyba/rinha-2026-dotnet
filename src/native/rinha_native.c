@@ -375,19 +375,27 @@ static inline const uint8_t *kd_node_ptr(const uint8_t *nodes, int node) {
 }
 
 static inline int64_t kd_bounds_lower_bound(const int16_t *q, const int16_t *min, const int16_t *max) {
-    int64_t sum = 0;
-    for (int dim = 0; dim < DIM; dim++) {
-        int64_t d = 0;
-        if (q[dim] < min[dim]) {
-            d = (int64_t)min[dim] - q[dim];
-        } else if (q[dim] > max[dim]) {
-            d = (int64_t)q[dim] - max[dim];
-        }
+    const __m256i dim_mask = _mm256_setr_epi16(
+        -1, -1, -1, -1,
+        -1, -1, -1, -1,
+        -1, -1, -1, -1,
+        -1, -1, 0, 0);
+    __m256i qv = _mm256_loadu_si256((const __m256i *)q);
+    __m256i minv = _mm256_loadu_si256((const __m256i *)min);
+    __m256i maxv = _mm256_loadu_si256((const __m256i *)max);
+    __m256i below = _mm256_and_si256(_mm256_sub_epi16(minv, qv), _mm256_cmpgt_epi16(minv, qv));
+    __m256i above = _mm256_and_si256(_mm256_sub_epi16(qv, maxv), _mm256_cmpgt_epi16(qv, maxv));
+    __m256i diff = _mm256_and_si256(_mm256_or_si256(below, above), dim_mask);
+    __m256i pairs = _mm256_madd_epi16(diff, diff);
 
-        sum += d * d;
-    }
-
-    return sum;
+    return (int64_t)_mm256_extract_epi32(pairs, 0) +
+           (int64_t)_mm256_extract_epi32(pairs, 1) +
+           (int64_t)_mm256_extract_epi32(pairs, 2) +
+           (int64_t)_mm256_extract_epi32(pairs, 3) +
+           (int64_t)_mm256_extract_epi32(pairs, 4) +
+           (int64_t)_mm256_extract_epi32(pairs, 5) +
+           (int64_t)_mm256_extract_epi32(pairs, 6) +
+           (int64_t)_mm256_extract_epi32(pairs, 7);
 }
 
 static inline int kd_candidate_better(

@@ -1,0 +1,11 @@
+{
+  "source": "zanfranceschi/rinha-de-backend-2026",
+  "ref": "main",
+  "test_data_sha256": "8335048a8cbac24832b26509fd79dccb01b57dcc2f6dca0080eeee8a72cb1743",
+  "references_gzip_sha256": "43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67",
+  "references_checksum_sha256": "24a1fd588e2598ab62de9ac7ac73408e571589e00da4243d7afc9d0f01878f77",
+  "total": 54100,
+  "fraud_count": 23959,
+  "legit_count": 30141,
+  "edge_case_count": 645
+}

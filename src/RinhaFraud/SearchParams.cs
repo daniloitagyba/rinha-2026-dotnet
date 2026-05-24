@@ -64,7 +64,7 @@ internal readonly struct SearchParams
             minCandidates,
             maxCandidates,
             Environment.GetEnvironmentVariable("SEARCH_MODE") == "flat",
-            EnvBool("PROFILE_FASTPATH", true),
+            EnvBool("PROFILE_FASTPATH", false),
             profileMinCount,
             EnvInt("PROFILE_LEGIT_MIN_COUNT", profileMinCount),
             EnvInt("PROFILE_FRAUD_MIN_COUNT", profileMinCount),

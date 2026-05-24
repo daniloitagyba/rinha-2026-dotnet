@@ -8,6 +8,7 @@ REFRESH_DATA="${REFRESH_DATA:-0}"
 FETCH_REFERENCES="${FETCH_REFERENCES:-1}"
 RUN_K6="${RUN_K6:-1}"
 RUN_PROFILE_CHECK="${RUN_PROFILE_CHECK:-1}"
+RUN_NATIVE_CHECK="${RUN_NATIVE_CHECK:-0}"
 MANIFEST_PATH="${MANIFEST_PATH:-$ROOT/test/dataset-manifest.json}"
 EVAL_LOG="${EVAL_LOG:-$ROOT/test/eval-accuracy.log}"
 NATIVE_EVAL_LOG="${NATIVE_EVAL_LOG:-$ROOT/test/eval-native-accuracy.log}"
@@ -121,20 +122,22 @@ grep -q 'fp=0 fn=0 parse_errors=0 weighted_errors=0' "$EVAL_LOG" || {
   exit 1
 }
 
-docker run --rm \
-  --entrypoint rinha-native-api \
-  -v "$ROOT/test:/test" \
-  -e KDTREE_INDEX=1 \
-  -e PROFILE_FASTPATH=0 \
-  -e PROFILE_DOMINANT_FASTPATH=0 \
-  "$IMAGE" \
-  eval /test/test-data.json > "$NATIVE_EVAL_LOG"
+if [ "$RUN_NATIVE_CHECK" = "1" ]; then
+  docker run --rm \
+    --entrypoint rinha-native-api \
+    -v "$ROOT/test:/test" \
+    -e KDTREE_INDEX=1 \
+    -e PROFILE_FASTPATH=0 \
+    -e PROFILE_DOMINANT_FASTPATH=0 \
+    "$IMAGE" \
+    eval /test/test-data.json > "$NATIVE_EVAL_LOG"
 
-cat "$NATIVE_EVAL_LOG"
-grep -q 'native_eval total=54100 fp=0 fn=0 parse_errors=0' "$NATIVE_EVAL_LOG" || {
-  echo "native accuracy gate failed; see $NATIVE_EVAL_LOG" >&2
-  exit 1
-}
+  cat "$NATIVE_EVAL_LOG"
+  grep -q 'native_eval total=54100 fp=0 fn=0 parse_errors=0' "$NATIVE_EVAL_LOG" || {
+    echo "native accuracy gate failed; see $NATIVE_EVAL_LOG" >&2
+    exit 1
+  }
+fi
 
 if [ "$RUN_PROFILE_CHECK" = "1" ]; then
   docker run --rm \

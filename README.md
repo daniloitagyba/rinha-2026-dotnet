@@ -4,28 +4,28 @@
 
 Rinha de Backend 2026 fraud-scoring submission.
 
-This repository is a hybrid .NET/C implementation. The competitive submission
-keeps the .NET 10 Native AOT CLI as the index builder, evaluator, and fallback
-API, while the current latency-oriented API process is the native C runtime.
+This repository is a hybrid .NET/C implementation. The submitted runtime keeps
+the API process in .NET 10 Native AOT and calls a native C KD-tree classifier
+through P/Invoke for the critical nearest-neighbor search.
 
 ## Architecture
 
 The competitive Docker image contains three main runtime components:
 
-- `rinha-fraud`: .NET 10 Native AOT CLI, index builder, evaluator, and fallback
-  HTTP server
-- `rinha-native-api`: native C HTTP/fd-handoff API used by submitted `api1`
-  and `api2`
+- `rinha-fraud`: .NET 10 Native AOT CLI and HTTP server used by submitted
+  `api1` and `api2`
 - `rinha-lb`: C TCP load balancer
-- `librinha_native.so`: shared native classifier used by the runtimes
+- `librinha_native.so`: C native classifier loaded by the .NET server through
+  P/Invoke
 
 Runtime topology:
 
 - `lb` listens on port `9999`
 - `lb` uses fd handoff over Unix sockets to distribute accepted TCP connections
-- `api1` and `api2` run `rinha-native-api`
+- `api1` and `api2` run `rinha-fraud serve`
 - the binary reference index is embedded in the Docker image
-- `KDTREE_INDEX=1` enables exact partitioned KD-tree search in the native API
+- `KDTREE_NATIVE=1` enables the native exact KD-tree search path inside the
+  .NET API process
 
 For fraud traffic, the load balancer only accepts and distributes connections.
 It does not classify transactions and does not use fraud-related payload data.
@@ -58,8 +58,8 @@ Classification response:
 
 - preprocessed binary index in the Docker image
 - exact partitioned KD-tree search for the current public baseline
-- native C API for the submitted hot path
-- .NET Native AOT retained for build, eval, self-test, and fallback API work
+- .NET Native AOT API for the submitted hot path
+- native C KD-tree search called through P/Invoke
 - C TCP load balancer using fd handoff
 - prebuilt JSON responses for every possible `fraud_score`
 - KD-tree search used as the accuracy path for submitted requests
@@ -69,7 +69,7 @@ Classification response:
 ## Structure
 
 - `src/RinhaFraud/`: .NET API, CLI, index builder, eval, self-test, and classifier integration
-- `src/native/`: native classifier/search runtime and submitted native API
+- `src/native/`: native classifier/search runtime
 - `src/lb/`: TCP load balancer
 - `scripts/`: local build, validation, release, and load scripts
 - `resources/`: references used to build the binary index
@@ -83,7 +83,6 @@ Main runtime variables:
 
 - `BIND_ADDR`: listen or fd-handoff address
 - `INDEX_PATH`: binary index path
-- `KDTREE_INDEX`: enables KD-tree sections in the native API runtime
 - `KDTREE_NATIVE`: enables KD-tree search through the native library from .NET
 - `WORKERS`: worker count per API instance
 - `EARLY_CANDIDATES`, `MIN_CANDIDATES`, `MAX_CANDIDATES`: search limits for non-KD paths

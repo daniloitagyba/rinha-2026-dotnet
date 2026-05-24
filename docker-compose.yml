@@ -36,7 +36,7 @@ services:
     image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:latest
     platform: linux/amd64
     cpuset: "0,1"
-    entrypoint: ["rinha-native-api"]
+    entrypoint: ["rinha-fraud", "serve"]
     build:
       context: .
       args:
@@ -51,7 +51,6 @@ services:
       SERVER_MODE: raw
       FD_RAW: "1"
       KDTREE_NATIVE: "1"
-      KDTREE_INDEX: "1"
       DOTNET_EnableDiagnostics: "0"
       TP_MIN_THREADS: "64"
       WORKERS: "2"
@@ -96,7 +95,7 @@ services:
     image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:latest
     platform: linux/amd64
     cpuset: "2,3"
-    entrypoint: ["rinha-native-api"]
+    entrypoint: ["rinha-fraud", "serve"]
     build:
       context: .
       args:
@@ -111,7 +110,6 @@ services:
       SERVER_MODE: raw
       FD_RAW: "1"
       KDTREE_NATIVE: "1"
-      KDTREE_INDEX: "1"
       DOTNET_EnableDiagnostics: "0"
       TP_MIN_THREADS: "64"
       WORKERS: "2"

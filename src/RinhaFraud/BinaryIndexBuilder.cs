@@ -681,9 +681,8 @@ internal static class BinaryIndexBuilder
         key |= (vector[9] > 0 ? 1 : 0) << 1;
         key |= (vector[10] > 0 ? 1 : 0) << 2;
         key |= (vector[11] > 0 ? 1 : 0) << 3;
-        key |= Vectorizer.Bucket4(vector[12]) << 4;
-        key |= (vector[2] >= 8500 ? 1 : 0) << 6;
-        key |= (vector[8] >= 4000 ? 1 : 0) << 7;
+        key |= Vectorizer.Bucket8(vector[0]) << 4;
+        key |= (vector[8] >= 3500 ? 1 : 0) << 7;
         return key;
     }
 

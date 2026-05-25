@@ -355,14 +355,22 @@ static inline int kd_bucket4(int16_t value) {
     return bucket < 0 ? 0 : bucket > 3 ? 3 : bucket;
 }
 
+static inline int kd_bucket8(int16_t value) {
+    if (value <= 0) {
+        return 0;
+    }
+
+    int bucket = (int)value * 8 / (SCALE + 1);
+    return bucket < 0 ? 0 : bucket > 7 ? 7 : bucket;
+}
+
 static inline int kd_partition_key(const int16_t *v) {
     int key = v[5] < 0 ? 1 : 0;
     key |= (v[9] > 0 ? 1 : 0) << 1;
     key |= (v[10] > 0 ? 1 : 0) << 2;
     key |= (v[11] > 0 ? 1 : 0) << 3;
-    key |= kd_bucket4(v[12]) << 4;
-    key |= (v[2] >= 8500 ? 1 : 0) << 6;
-    key |= (v[8] >= 4000 ? 1 : 0) << 7;
+    key |= kd_bucket8(v[0]) << 4;
+    key |= (v[8] >= 3500 ? 1 : 0) << 7;
     return key;
 }
 

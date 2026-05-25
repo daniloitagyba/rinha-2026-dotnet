@@ -128,3 +128,15 @@ Pelo PowerShell:
 ```powershell
 .\scripts\validate-local.ps1
 ```
+
+Verificar se as referencias oficiais mudaram e rodar o gate de refresh apenas
+quando necessario:
+
+```sh
+sh scripts/reference-refresh.sh
+```
+
+O workflow agendado `Refresh references candidate` roda o mesmo caminho a cada
+seis horas. Quando as referencias mudam, ele reconstrói o índice, roda os
+gates locais, publica uma imagem candidata no GHCR e registra o hash validado
+sem abrir teste remoto da Rinha automaticamente.

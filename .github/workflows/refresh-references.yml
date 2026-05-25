@@ -1,0 +1,111 @@
+name: Refresh references candidate
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run validation even when the references hash did not change"
+        required: false
+        default: "0"
+        type: choice
+        options:
+          - "0"
+          - "1"
+      run_k6:
+        description: "Run the Docker Compose + k6 gate"
+        required: false
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "0"
+      push_image:
+        description: "Push a validated candidate image to GHCR"
+        required: false
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "0"
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: refresh-references
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect and validate references
+        id: refresh
+        env:
+          FORCE_REFRESH: ${{ github.event_name == 'workflow_dispatch' && inputs.force || '0' }}
+          RUN_K6: ${{ github.event_name == 'workflow_dispatch' && inputs.run_k6 || '1' }}
+          PUSH_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.push_image || '1' }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          PROJECT_NAME: rinha-reference-refresh
+        run: sh scripts/reference-refresh.sh
+
+      - name: Record validated reference state
+        if: steps.refresh.outputs.state_updated == '1'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/reference-state.env
+          if git diff --cached --quiet; then
+            echo "reference state already current"
+            exit 0
+          fi
+          git commit -m "Record validated references ${{ steps.refresh.outputs.refs_short }}"
+          git push
+
+      - name: Write summary
+        if: always()
+        run: |
+          {
+            echo "## Reference refresh"
+            echo
+            echo "- changed: ${{ steps.refresh.outputs.changed }}"
+            echo "- references sha: ${{ steps.refresh.outputs.refs_sha }}"
+            echo "- candidate image: ${{ steps.refresh.outputs.candidate_image }}"
+            echo "- state updated: ${{ steps.refresh.outputs.state_updated }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-refresh-${{ github.run_id }}
+          if-no-files-found: ignore
+          path: |
+            test/dataset-manifest.json
+            test/eval-accuracy.log
+            test/eval-native-accuracy.log
+            test/eval-profile-fastpath.log
+            test/results.json
+            test/reference-refresh-summary.env

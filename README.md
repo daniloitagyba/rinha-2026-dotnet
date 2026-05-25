@@ -128,3 +128,15 @@ From PowerShell:
 ```powershell
 .\scripts\validate-local.ps1
 ```
+
+Check whether the official references changed and run the refresh gate only
+when needed:
+
+```sh
+sh scripts/reference-refresh.sh
+```
+
+The scheduled `Refresh references candidate` workflow runs the same path every
+six hours. When references change, it rebuilds the index, runs the local gates,
+pushes a GHCR candidate image, and records the validated dataset hash without
+opening a remote Rinha test automatically.

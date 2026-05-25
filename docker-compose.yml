@@ -1,6 +1,6 @@
 services:
   lb:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:0ae06bbfb8e2deb8e3fc75b5c0e579c90eb6fd73
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:ee21b66e627cd4a346a550b320723656211423c2
     platform: linux/amd64
     entrypoint: ["rinha-lb"]
     environment:
@@ -25,14 +25,14 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:0ae06bbfb8e2deb8e3fc75b5c0e579c90eb6fd73
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:ee21b66e627cd4a346a550b320723656211423c2
     platform: linux/amd64
     entrypoint: ["rinha-fraud", "serve"]
     environment:
       BIND_ADDR: fd:/sockets/api1.sock.ctrl
       INDEX_PATH: /app/data/references.idx
       INDEX_HUGEPAGES: "1"
-      SERVER_MODE: raw
+      SERVER_MODE: raw-async
       FD_RAW: "1"
       TP_MIN_THREADS: "64"
       WORKERS: "2"
@@ -78,14 +78,14 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:0ae06bbfb8e2deb8e3fc75b5c0e579c90eb6fd73
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:ee21b66e627cd4a346a550b320723656211423c2
     platform: linux/amd64
     entrypoint: ["rinha-fraud", "serve"]
     environment:
       BIND_ADDR: fd:/sockets/api2.sock.ctrl
       INDEX_PATH: /app/data/references.idx
       INDEX_HUGEPAGES: "1"
-      SERVER_MODE: raw
+      SERVER_MODE: raw-async
       FD_RAW: "1"
       TP_MIN_THREADS: "64"
       WORKERS: "2"

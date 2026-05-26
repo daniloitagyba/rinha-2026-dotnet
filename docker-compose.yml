@@ -137,3 +137,9 @@ volumes:
       type: tmpfs
       device: tmpfs
       o: size=4m,mode=0777
+
+networks:
+  default:
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+      com.docker.network.bridge.enable_icc: "true"

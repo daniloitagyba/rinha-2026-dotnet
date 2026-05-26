@@ -5,6 +5,90 @@ internal static class QueryBuilder
 {
     public static bool TryBuildQuery(ReadOnlySpan<byte> body, Span<short> output)
     {
+        return TryBuildQueryOrdered(body, output) || TryBuildQueryGeneric(body, output);
+    }
+
+    private static bool TryBuildQueryOrdered(ReadOnlySpan<byte> body, Span<short> output)
+    {
+        var pos = 0;
+        if (!Consume(body, ref pos, "{\"id\":\""u8) ||
+            !SkipSimpleStringContent(body, ref pos) ||
+            !Consume(body, ref pos, ",\"transaction\":{\"amount\":"u8) ||
+            !TryReadNumber(body, ref pos, out var amount) ||
+            !Consume(body, ref pos, ",\"installments\":"u8) ||
+            !TryReadNumber(body, ref pos, out var installments) ||
+            !Consume(body, ref pos, ",\"requested_at\":\""u8) ||
+            !TryReadSimpleStringContent(body, ref pos, out var requestedAtStart, out var requestedAtLength) ||
+            !Consume(body, ref pos, "},\"customer\":{\"avg_amount\":"u8) ||
+            !TryReadNumber(body, ref pos, out var customerAvg) ||
+            !Consume(body, ref pos, ",\"tx_count_24h\":"u8) ||
+            !TryReadNumber(body, ref pos, out var txCount24h) ||
+            !Consume(body, ref pos, ",\"known_merchants\":"u8) ||
+            !TryReadArraySlice(body, ref pos, out var knownMerchantsStart, out var knownMerchantsLength) ||
+            !Consume(body, ref pos, "},\"merchant\":{\"id\":\""u8) ||
+            !TryReadSimpleStringContent(body, ref pos, out var merchantIdStart, out var merchantIdLength) ||
+            !Consume(body, ref pos, ",\"mcc\":\""u8) ||
+            !TryReadSimpleStringContent(body, ref pos, out var mccStart, out var mccLength) ||
+            !Consume(body, ref pos, ",\"avg_amount\":"u8) ||
+            !TryReadNumber(body, ref pos, out var merchantAvg) ||
+            !Consume(body, ref pos, "},\"terminal\":{\"is_online\":"u8) ||
+            !TryReadBool(body, ref pos, out var isOnline) ||
+            !Consume(body, ref pos, ",\"card_present\":"u8) ||
+            !TryReadBool(body, ref pos, out var cardPresent) ||
+            !Consume(body, ref pos, ",\"km_from_home\":"u8) ||
+            !TryReadNumber(body, ref pos, out var kmFromHome) ||
+            !Consume(body, ref pos, "},\"last_transaction\":"u8))
+        {
+            return false;
+        }
+
+        var hasLastTransaction = false;
+        var lastTimestampStart = 0;
+        var lastTimestampLength = 0;
+        var lastKmFromCurrent = 0.0;
+        if (Consume(body, ref pos, "null"u8))
+        {
+            hasLastTransaction = false;
+        }
+        else
+        {
+            hasLastTransaction = true;
+            if (!Consume(body, ref pos, "{\"timestamp\":\""u8) ||
+                !TryReadSimpleStringContent(body, ref pos, out lastTimestampStart, out lastTimestampLength) ||
+                !Consume(body, ref pos, ",\"km_from_current\":"u8) ||
+                !TryReadNumber(body, ref pos, out lastKmFromCurrent) ||
+                !Consume(body, ref pos, "}"u8))
+            {
+                return false;
+            }
+        }
+
+        if (!Consume(body, ref pos, "}"u8) || pos != body.Length)
+        {
+            return false;
+        }
+
+        Vectorizer.Vectorize(
+            amount,
+            installments,
+            body.Slice(requestedAtStart, requestedAtLength),
+            customerAvg,
+            txCount24h,
+            ContainsQuoted(body.Slice(knownMerchantsStart, knownMerchantsLength), body.Slice(merchantIdStart, merchantIdLength)),
+            body.Slice(mccStart, mccLength),
+            merchantAvg,
+            isOnline,
+            cardPresent,
+            kmFromHome,
+            hasLastTransaction,
+            body.Slice(lastTimestampStart, lastTimestampLength),
+            lastKmFromCurrent,
+            output);
+        return true;
+    }
+
+    private static bool TryBuildQueryGeneric(ReadOnlySpan<byte> body, Span<short> output)
+    {
         double amount = 0;
         double installments = 0;
         var requestedAtStart = 0;
@@ -142,6 +226,47 @@ internal static class QueryBuilder
             lastKmFromCurrent,
             output);
         return true;
+    }
+
+    private static bool Consume(ReadOnlySpan<byte> source, ref int pos, ReadOnlySpan<byte> literal)
+    {
+        if (source.Length - pos < literal.Length || !source.Slice(pos, literal.Length).SequenceEqual(literal))
+        {
+            return false;
+        }
+
+        pos += literal.Length;
+        return true;
+    }
+
+    private static bool SkipSimpleStringContent(ReadOnlySpan<byte> source, ref int pos)
+    {
+        return TryReadSimpleStringContent(source, ref pos, out _, out _);
+    }
+
+    private static bool TryReadSimpleStringContent(ReadOnlySpan<byte> source, ref int pos, out int start, out int length)
+    {
+        start = pos;
+        length = 0;
+        while ((uint)pos < (uint)source.Length)
+        {
+            var b = source[pos];
+            if (b == (byte)'\\')
+            {
+                return false;
+            }
+
+            if (b == (byte)'"')
+            {
+                length = pos - start;
+                pos++;
+                return true;
+            }
+
+            pos++;
+        }
+
+        return false;
     }
 
     private static bool TryParseTransaction(

@@ -16,6 +16,8 @@ internal static class EvalCommand
         var errorsPath = Environment.GetEnvironmentVariable("EVAL_ERRORS_PATH");
         var dumpPath = Environment.GetEnvironmentVariable("EVAL_DUMP_PATH");
         var reportPath = Environment.GetEnvironmentVariable("EVAL_REPORT_PATH");
+        var evalNativeJson = EnvBool("EVAL_NATIVE_JSON", false);
+        var evalNativeJsonOnly = EnvBool("EVAL_NATIVE_JSON_ONLY", false);
         var diagnosticsEnabled = EnvBool("EVAL_DIAGNOSTICS", false) || !string.IsNullOrWhiteSpace(reportPath);
         var data = File.ReadAllBytes(inputPath);
         using var index = BinaryIndex.Open(indexPath);
@@ -77,7 +79,16 @@ internal static class EvalCommand
             ClassificationDiagnostics diagnostics = default;
             var request = data.AsSpan(requestStart, requestEnd - requestStart + 1);
             var parseStarted = Stopwatch.GetTimestamp();
-            if (QueryBuilder.TryBuildQuery(request, queryBuffer))
+            if (evalNativeJson && index.TryClassifyFraudCountJson(request, searchParams, out fraudCount))
+            {
+                parsed = true;
+                approved = fraudCount < 3;
+            }
+            else if (evalNativeJsonOnly)
+            {
+                parseErrors++;
+            }
+            else if (QueryBuilder.TryBuildQuery(request, queryBuffer))
             {
                 parsed = true;
                 if (diagnosticsEnabled)
@@ -85,7 +96,7 @@ internal static class EvalCommand
                     diagnostics = index.ClassifyFraudCountWithDiagnostics(queryBuffer, searchParams);
                     hasDiagnostics = true;
                     fraudCount = diagnostics.FraudCount;
-                    AddPathStats(pathStats!, diagnostics.Path, diagnostics.ElapsedTicks, diagnostics.Candidates, diagnostics.FallbackCandidates);
+                    AddPathStats(pathStats!, diagnostics);
                 }
                 else
                 {
@@ -157,7 +168,7 @@ internal static class EvalCommand
         Console.WriteLine($"index={indexPath}");
         Console.WriteLine($"risky_fallback_refs={index.RiskyFallbackCount}");
         Console.WriteLine(
-            $"params early_candidates={searchParams.EarlyCandidates} min_candidates={searchParams.MinCandidates} max_candidates={searchParams.MaxCandidates} flat={searchParams.Flat} profile_fastpath={searchParams.ProfileFastPath} profile_min_count={searchParams.ProfileMinCount} profile_legit_min_count={searchParams.ProfileLegitMinCount} profile_fraud_min_count={searchParams.ProfileFraudMinCount} profile_dominant_fastpath={searchParams.ProfileDominantFastPath} profile_dominant_min_count={searchParams.ProfileDominantMinCount} profile_dominant_max_opposite={searchParams.ProfileDominantMaxOpposite} exact_fallback={searchParams.ExactFallback}");
+            $"params early_candidates={searchParams.EarlyCandidates} min_candidates={searchParams.MinCandidates} max_candidates={searchParams.MaxCandidates} flat={searchParams.Flat} profile_fastpath={searchParams.ProfileFastPath} profile_min_count={searchParams.ProfileMinCount} profile_legit_min_count={searchParams.ProfileLegitMinCount} profile_fraud_min_count={searchParams.ProfileFraudMinCount} profile_fraud_amount_min={searchParams.ProfileFraudAmountMin} profile_fraud_low_amount_fastpath={searchParams.ProfileFraudLowAmountFastPath} profile_fraud_mid_amount_no_last_fastpath={searchParams.ProfileFraudMidAmountNoLastFastPath} profile_fraud_mid_amount_min={searchParams.ProfileFraudMidAmountMin} profile_dominant_fastpath={searchParams.ProfileDominantFastPath} profile_dominant_min_count={searchParams.ProfileDominantMinCount} profile_dominant_max_opposite={searchParams.ProfileDominantMaxOpposite} exact_fallback={searchParams.ExactFallback}");
         Console.WriteLine($"total={total} measured={measured} correct={correct} accuracy={accuracy:F6}");
         Console.WriteLine($"fp={fp} fn={fn} parse_errors={parseErrors} weighted_errors={weightedErrors} failure_rate={failureRate:F6} score_det={detectionScore:F2}");
         Console.WriteLine($"elapsed_ms={started.ElapsedMilliseconds} throughput_per_s={throughput:F1}");
@@ -220,7 +231,39 @@ internal static class EvalCommand
             writer.Write(diagnostics.FallbackCandidates);
             writer.Write(",\"classify_latency_ns\":");
             writer.Write(TicksToNs(diagnostics.ElapsedTicks));
+            if (diagnostics.KdPrimaryPartition >= 0)
+            {
+                writer.Write(",\"kd_primary_partition\":");
+                writer.Write(diagnostics.KdPrimaryPartition);
+                writer.Write(",\"kd_searched_partitions\":");
+                writer.Write(diagnostics.KdSearchedPartitions);
+                writer.Write(",\"kd_candidate_partitions\":");
+                writer.Write(diagnostics.KdCandidatePartitions);
+                writer.Write(",\"kd_visited_nodes\":");
+                writer.Write(diagnostics.KdVisitedNodes);
+                writer.Write(",\"kd_pruned_nodes\":");
+                writer.Write(diagnostics.KdPrunedNodes);
+                writer.Write(",\"kd_scanned_leaves\":");
+                writer.Write(diagnostics.KdScannedLeaves);
+                writer.Write(",\"kd_scanned_vectors\":");
+                writer.Write(diagnostics.KdScannedVectors);
+                writer.Write(",\"kd_max_stack_depth\":");
+                writer.Write(diagnostics.KdMaxStackDepth);
+            }
         }
+    }
+
+    private static void AddPathStats(
+        Dictionary<ClassificationPath, PathAggregate> stats,
+        ClassificationDiagnostics diagnostics)
+    {
+        if (!stats.TryGetValue(diagnostics.Path, out var aggregate))
+        {
+            aggregate = new PathAggregate();
+            stats.Add(diagnostics.Path, aggregate);
+        }
+
+        aggregate.Add(diagnostics);
     }
 
     private static void AddPathStats(
@@ -282,12 +325,20 @@ internal static class EvalCommand
         {
             var aggregate = item.Value;
             aggregate.Latencies.Sort();
+            aggregate.SortKdSamples();
             var p50 = TicksToNs(Percentile(aggregate.Latencies, 0.50));
             var p95 = TicksToNs(Percentile(aggregate.Latencies, 0.95));
             var p99 = TicksToNs(Percentile(aggregate.Latencies, 0.99));
             var percentage = total == 0 ? 0.0 : aggregate.Count * 100.0 / total;
-            Console.WriteLine(
-                $"path={ClassificationPathName(item.Key)} count={aggregate.Count} pct={percentage:F2} p50_ns={p50} p95_ns={p95} p99_ns={p99} avg_candidates={aggregate.AverageCandidates():F1} avg_fallback_candidates={aggregate.AverageFallbackCandidates():F1}");
+            var line =
+                $"path={ClassificationPathName(item.Key)} count={aggregate.Count} pct={percentage:F2} p50_ns={p50} p95_ns={p95} p99_ns={p99} avg_candidates={aggregate.AverageCandidates():F1} avg_fallback_candidates={aggregate.AverageFallbackCandidates():F1}";
+            if (aggregate.KdSamples > 0)
+            {
+                line +=
+                    $" kd_samples={aggregate.KdSamples} avg_kd_searched_partitions={aggregate.AverageKdSearchedPartitions():F1} p99_kd_searched_partitions={Percentile(aggregate.KdSearchedPartitions, 0.99)} avg_kd_candidate_partitions={aggregate.AverageKdCandidatePartitions():F1} avg_kd_visited_nodes={aggregate.AverageKdVisitedNodes():F1} p99_kd_visited_nodes={Percentile(aggregate.KdVisitedNodes, 0.99)} avg_kd_pruned_nodes={aggregate.AverageKdPrunedNodes():F1} avg_kd_scanned_leaves={aggregate.AverageKdScannedLeaves():F1} avg_kd_scanned_vectors={aggregate.AverageKdScannedVectors():F1} p99_kd_scanned_vectors={Percentile(aggregate.KdScannedVectors, 0.99)} max_kd_stack_depth={aggregate.MaxKdStackDepth}";
+            }
+
+            Console.WriteLine(line);
         }
 
         Console.WriteLine($"diagnostics_error_groups={errorGroups.Count}");
@@ -330,6 +381,7 @@ internal static class EvalCommand
             var item = pathItems[i];
             var aggregate = item.Value;
             aggregate.Latencies.Sort();
+            aggregate.SortKdSamples();
             var percentage = total == 0 ? 0.0 : aggregate.Count * 100.0 / total;
             writer.Write("    {");
             writer.Write($"\"path\":\"{ClassificationPathName(item.Key)}\",");
@@ -340,6 +392,21 @@ internal static class EvalCommand
             writer.Write($"\"p99_ns\":{TicksToNs(Percentile(aggregate.Latencies, 0.99))},");
             writer.Write($"\"avg_candidates\":{aggregate.AverageCandidates():F2},");
             writer.Write($"\"avg_fallback_candidates\":{aggregate.AverageFallbackCandidates():F2}");
+            if (aggregate.KdSamples > 0)
+            {
+                writer.Write($",\"kd_samples\":{aggregate.KdSamples}");
+                writer.Write($",\"avg_kd_searched_partitions\":{aggregate.AverageKdSearchedPartitions():F2}");
+                writer.Write($",\"p99_kd_searched_partitions\":{Percentile(aggregate.KdSearchedPartitions, 0.99)}");
+                writer.Write($",\"avg_kd_candidate_partitions\":{aggregate.AverageKdCandidatePartitions():F2}");
+                writer.Write($",\"avg_kd_visited_nodes\":{aggregate.AverageKdVisitedNodes():F2}");
+                writer.Write($",\"p99_kd_visited_nodes\":{Percentile(aggregate.KdVisitedNodes, 0.99)}");
+                writer.Write($",\"avg_kd_pruned_nodes\":{aggregate.AverageKdPrunedNodes():F2}");
+                writer.Write($",\"avg_kd_scanned_leaves\":{aggregate.AverageKdScannedLeaves():F2}");
+                writer.Write($",\"avg_kd_scanned_vectors\":{aggregate.AverageKdScannedVectors():F2}");
+                writer.Write($",\"p99_kd_scanned_vectors\":{Percentile(aggregate.KdScannedVectors, 0.99)}");
+                writer.Write($",\"max_kd_stack_depth\":{aggregate.MaxKdStackDepth}");
+            }
+
             writer.Write(i == pathItems.Count - 1 ? "}\n" : "},\n");
         }
 
@@ -554,7 +621,54 @@ internal static class EvalCommand
 
         public long TotalFallbackCandidates { get; private set; }
 
+        public int KdSamples { get; private set; }
+
+        public long TotalKdSearchedPartitions { get; private set; }
+
+        public long TotalKdCandidatePartitions { get; private set; }
+
+        public long TotalKdVisitedNodes { get; private set; }
+
+        public long TotalKdPrunedNodes { get; private set; }
+
+        public long TotalKdScannedLeaves { get; private set; }
+
+        public long TotalKdScannedVectors { get; private set; }
+
+        public int MaxKdStackDepth { get; private set; }
+
         public List<long> Latencies { get; } = new();
+
+        public List<long> KdSearchedPartitions { get; } = new();
+
+        public List<long> KdVisitedNodes { get; } = new();
+
+        public List<long> KdScannedVectors { get; } = new();
+
+        public void Add(ClassificationDiagnostics diagnostics)
+        {
+            Add(diagnostics.ElapsedTicks, diagnostics.Candidates, diagnostics.FallbackCandidates);
+            if (diagnostics.KdPrimaryPartition < 0)
+            {
+                return;
+            }
+
+            KdSamples++;
+            TotalKdSearchedPartitions += diagnostics.KdSearchedPartitions;
+            TotalKdCandidatePartitions += diagnostics.KdCandidatePartitions;
+            TotalKdVisitedNodes += diagnostics.KdVisitedNodes;
+            TotalKdPrunedNodes += diagnostics.KdPrunedNodes;
+            TotalKdScannedLeaves += diagnostics.KdScannedLeaves;
+            TotalKdScannedVectors += diagnostics.KdScannedVectors;
+            if (diagnostics.KdMaxStackDepth > MaxKdStackDepth)
+            {
+                MaxKdStackDepth = diagnostics.KdMaxStackDepth;
+            }
+
+            KdSearchedPartitions.Add(diagnostics.KdSearchedPartitions);
+            KdVisitedNodes.Add(diagnostics.KdVisitedNodes);
+            KdScannedVectors.Add(diagnostics.KdScannedVectors);
+        }
 
         public void Add(long ticks, int candidates, int fallbackCandidates)
         {
@@ -562,6 +676,13 @@ internal static class EvalCommand
             TotalCandidates += candidates;
             TotalFallbackCandidates += fallbackCandidates;
             Latencies.Add(ticks);
+        }
+
+        public void SortKdSamples()
+        {
+            KdSearchedPartitions.Sort();
+            KdVisitedNodes.Sort();
+            KdScannedVectors.Sort();
         }
 
         public double AverageCandidates()
@@ -572,6 +693,36 @@ internal static class EvalCommand
         public double AverageFallbackCandidates()
         {
             return Count == 0 ? 0.0 : TotalFallbackCandidates / (double)Count;
+        }
+
+        public double AverageKdSearchedPartitions()
+        {
+            return KdSamples == 0 ? 0.0 : TotalKdSearchedPartitions / (double)KdSamples;
+        }
+
+        public double AverageKdCandidatePartitions()
+        {
+            return KdSamples == 0 ? 0.0 : TotalKdCandidatePartitions / (double)KdSamples;
+        }
+
+        public double AverageKdVisitedNodes()
+        {
+            return KdSamples == 0 ? 0.0 : TotalKdVisitedNodes / (double)KdSamples;
+        }
+
+        public double AverageKdPrunedNodes()
+        {
+            return KdSamples == 0 ? 0.0 : TotalKdPrunedNodes / (double)KdSamples;
+        }
+
+        public double AverageKdScannedLeaves()
+        {
+            return KdSamples == 0 ? 0.0 : TotalKdScannedLeaves / (double)KdSamples;
+        }
+
+        public double AverageKdScannedVectors()
+        {
+            return KdSamples == 0 ? 0.0 : TotalKdScannedVectors / (double)KdSamples;
         }
     }
 

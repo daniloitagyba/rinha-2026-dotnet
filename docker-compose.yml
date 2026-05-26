@@ -9,7 +9,9 @@ services:
         BUILD_BLOCK_INDEX: ${BUILD_BLOCK_INDEX:-0}
         BUILD_NATIVE_ONLY_INDEX: ${BUILD_NATIVE_ONLY_INDEX:-1}
         BUILD_KDTREE_INDEX: ${BUILD_KDTREE_INDEX:-1}
-        KDTREE_LEAF_SIZE: ${KDTREE_LEAF_SIZE:-128}
+        KDTREE_LEAF_SIZE: ${KDTREE_LEAF_SIZE:-96}
+        KDTREE_KEY_PROFILE: ${KDTREE_KEY_PROFILE:-0}
+        NATIVE_CFLAGS_EXTRA: ${NATIVE_CFLAGS_EXTRA:-}
     entrypoint: ["rinha-lb"]
     environment:
       LB_MODE: fdpass
@@ -43,7 +45,9 @@ services:
         BUILD_BLOCK_INDEX: ${BUILD_BLOCK_INDEX:-0}
         BUILD_NATIVE_ONLY_INDEX: ${BUILD_NATIVE_ONLY_INDEX:-1}
         BUILD_KDTREE_INDEX: ${BUILD_KDTREE_INDEX:-1}
-        KDTREE_LEAF_SIZE: ${KDTREE_LEAF_SIZE:-128}
+        KDTREE_LEAF_SIZE: ${KDTREE_LEAF_SIZE:-96}
+        KDTREE_KEY_PROFILE: ${KDTREE_KEY_PROFILE:-0}
+        NATIVE_CFLAGS_EXTRA: ${NATIVE_CFLAGS_EXTRA:-}
     environment:
       BIND_ADDR: fd:/sockets/api1.sock.ctrl
       INDEX_PATH: /app/data/references.idx
@@ -102,7 +106,9 @@ services:
         BUILD_BLOCK_INDEX: ${BUILD_BLOCK_INDEX:-0}
         BUILD_NATIVE_ONLY_INDEX: ${BUILD_NATIVE_ONLY_INDEX:-1}
         BUILD_KDTREE_INDEX: ${BUILD_KDTREE_INDEX:-1}
-        KDTREE_LEAF_SIZE: ${KDTREE_LEAF_SIZE:-128}
+        KDTREE_LEAF_SIZE: ${KDTREE_LEAF_SIZE:-96}
+        KDTREE_KEY_PROFILE: ${KDTREE_KEY_PROFILE:-0}
+        NATIVE_CFLAGS_EXTRA: ${NATIVE_CFLAGS_EXTRA:-}
     environment:
       BIND_ADDR: fd:/sockets/api2.sock.ctrl
       INDEX_PATH: /app/data/references.idx
@@ -157,3 +163,9 @@ volumes:
       type: tmpfs
       device: tmpfs
       o: size=4m,mode=0777
+
+networks:
+  default:
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+      com.docker.network.bridge.enable_icc: "true"

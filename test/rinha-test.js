@@ -11,6 +11,7 @@ const preAllocatedVUs = Number(__ENV.PRE_ALLOCATED_VUS || '100');
 const maxVUs = Number(__ENV.MAX_VUS || '250');
 const requestTimeout = __ENV.REQUEST_TIMEOUT || '2001ms';
 const resultsPath = __ENV.RESULTS_PATH || 'test/results.json';
+const dumpMismatches = __ENV.DUMP_MISMATCHES === '1';
 
 const testData = new SharedArray('test-data', function () {
   return JSON.parse(open('./test-data.json')).entries;
@@ -76,6 +77,15 @@ export default function () {
       if (body.approved) tnCount.add(1);
       else tpCount.add(1);
     } else {
+      if (dumpMismatches) {
+        console.log(JSON.stringify({
+          idx,
+          expected_approved: expectedApproved,
+          approved: body.approved,
+          fraud_score: body.fraud_score,
+          request: entry.request,
+        }));
+      }
       if (body.approved) fnCount.add(1);
       else fpCount.add(1);
     }

@@ -20,7 +20,15 @@ internal readonly struct ClassificationDiagnostics
         int primaryBucket,
         int candidates,
         int fallbackCandidates,
-        long elapsedTicks)
+        long elapsedTicks,
+        int kdSearchedPartitions = 0,
+        int kdCandidatePartitions = 0,
+        int kdVisitedNodes = 0,
+        int kdPrunedNodes = 0,
+        int kdScannedLeaves = 0,
+        int kdScannedVectors = 0,
+        int kdMaxStackDepth = 0,
+        int kdPrimaryPartition = -1)
     {
         FraudCount = fraudCount;
         Path = path;
@@ -29,6 +37,14 @@ internal readonly struct ClassificationDiagnostics
         Candidates = candidates;
         FallbackCandidates = fallbackCandidates;
         ElapsedTicks = elapsedTicks;
+        KdSearchedPartitions = kdSearchedPartitions;
+        KdCandidatePartitions = kdCandidatePartitions;
+        KdVisitedNodes = kdVisitedNodes;
+        KdPrunedNodes = kdPrunedNodes;
+        KdScannedLeaves = kdScannedLeaves;
+        KdScannedVectors = kdScannedVectors;
+        KdMaxStackDepth = kdMaxStackDepth;
+        KdPrimaryPartition = kdPrimaryPartition;
     }
 
     public int FraudCount { get; }
@@ -44,4 +60,20 @@ internal readonly struct ClassificationDiagnostics
     public int FallbackCandidates { get; }
 
     public long ElapsedTicks { get; }
+
+    public int KdSearchedPartitions { get; }
+
+    public int KdCandidatePartitions { get; }
+
+    public int KdVisitedNodes { get; }
+
+    public int KdPrunedNodes { get; }
+
+    public int KdScannedLeaves { get; }
+
+    public int KdScannedVectors { get; }
+
+    public int KdMaxStackDepth { get; }
+
+    public int KdPrimaryPartition { get; }
 }

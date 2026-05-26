@@ -23,7 +23,8 @@ internal static class BinaryIndexBuilder
     private const int KdPartitionRecordSize = 72;
     private const int KdNodeRecordSize = 80;
     private const int KdVectorStride = 16;
-    private const int KdDefaultLeafSize = 128;
+    private const int KdDefaultLeafSize = 96;
+    private static readonly int KdKeyProfile = Math.Clamp(EnvInt("KDTREE_KEY_PROFILE", 0), 0, 10);
 
     private const uint SectionProfileCounts = 1;
     private const uint SectionProfileMasks = 2;
@@ -677,12 +678,29 @@ internal static class BinaryIndexBuilder
 
     private static int KdPartitionKey(ReadOnlySpan<short> vector)
     {
+        var key = KdPartitionBaseFlags(vector);
+        return KdKeyProfile switch
+        {
+            1 => key | (Vectorizer.Bucket8(vector[0]) << 4) | ((vector[2] >= 3500 ? 1 : 0) << 7),
+            2 => key | (Vectorizer.Bucket4(vector[0]) << 4) | (Vectorizer.Bucket4(vector[2]) << 6),
+            3 => key | (Vectorizer.Bucket4(vector[0]) << 4) | (Vectorizer.Bucket4(vector[7]) << 6),
+            4 => key | (Vectorizer.Bucket4(vector[0]) << 4) | (Vectorizer.Bucket4(vector[3]) << 6),
+            5 => key | (Vectorizer.Bucket4(vector[0]) << 4) | (Vectorizer.Bucket4(vector[12]) << 6),
+            6 => key | (Vectorizer.Bucket4(vector[0]) << 4) | (Vectorizer.Bucket4(vector[13]) << 6),
+            7 => key | (Vectorizer.Bucket8(vector[0]) << 4) | ((vector[7] >= 3500 ? 1 : 0) << 7),
+            8 => key | (Vectorizer.Bucket8(vector[0]) << 4) | ((vector[3] >= 3500 ? 1 : 0) << 7),
+            9 => key | (Vectorizer.Bucket8(vector[0]) << 4) | ((vector[12] >= 3500 ? 1 : 0) << 7),
+            10 => key | (Vectorizer.Bucket8(vector[0]) << 4) | ((vector[13] >= 3500 ? 1 : 0) << 7),
+            _ => key | (Vectorizer.Bucket8(vector[0]) << 4) | ((vector[8] >= 3500 ? 1 : 0) << 7)
+        };
+    }
+
+    private static int KdPartitionBaseFlags(ReadOnlySpan<short> vector)
+    {
         var key = vector[5] < 0 ? 1 : 0;
         key |= (vector[9] > 0 ? 1 : 0) << 1;
         key |= (vector[10] > 0 ? 1 : 0) << 2;
         key |= (vector[11] > 0 ? 1 : 0) << 3;
-        key |= Vectorizer.Bucket8(vector[0]) << 4;
-        key |= (vector[8] >= 3500 ? 1 : 0) << 7;
         return key;
     }
 

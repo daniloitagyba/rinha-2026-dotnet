@@ -109,9 +109,22 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${PROFILE_MIN_COUNT:-}" ] || \
    [ -n "${PROFILE_LEGIT_MIN_COUNT:-}" ] || \
    [ -n "${PROFILE_FRAUD_MIN_COUNT:-}" ] || \
+   [ -n "${PROFILE_FRAUD_AMOUNT_MIN:-}" ] || \
+   [ -n "${PROFILE_FRAUD_LOW_AMOUNT_FASTPATH:-}" ] || \
+   [ -n "${PROFILE_FRAUD_LOW_AMOUNT_KM_HOME_MIN:-}" ] || \
+   [ -n "${PROFILE_FRAUD_LOW_AMOUNT_TX24H_MIN:-}" ] || \
+   [ -n "${PROFILE_FRAUD_MID_AMOUNT_NO_LAST_FASTPATH:-}" ] || \
+   [ -n "${PROFILE_FRAUD_MID_AMOUNT_MIN:-}" ] || \
+   [ -n "${PROFILE_FRAUD_NO_LAST_ONLY:-}" ] || \
    [ -n "${PROFILE_DOMINANT_FASTPATH:-}" ] || \
    [ -n "${PROFILE_DOMINANT_MIN_COUNT:-}" ] || \
    [ -n "${PROFILE_DOMINANT_MAX_OPPOSITE:-}" ] || \
+   [ -n "${PROFILE_DOMINANT_LEGIT_ENABLED:-}" ] || \
+   [ -n "${PROFILE_DOMINANT_FRAUD_ENABLED:-}" ] || \
+   [ -n "${BUCKET_FASTPATH:-}" ] || \
+   [ -n "${BUCKET_LEGIT_MIN_COUNT:-}" ] || \
+   [ -n "${BUCKET_FRAUD_MIN_COUNT:-}" ] || \
+   [ -n "${BUCKET_FRAUD_NO_LAST_ONLY:-}" ] || \
    [ -n "${EXACT_FALLBACK:-}" ] || \
    [ -n "${EARLY_EDGE_FALLBACK:-}" ] || \
    [ -n "${RISKY_AMOUNT_MIN:-}" ] || \
@@ -134,12 +147,28 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${KDTREE_MAX_PARTITIONS:-}" ] || \
    [ -n "${BLOCK_SCAN:-}" ] || \
    [ -n "${SOCKETS_MOUNT:-}" ] || \
+   [ -n "${API_ENTRYPOINT:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
+   [ -n "${NATIVE_WORKERS:-}" ] || \
    [ -n "${FD_RECEIVERS:-}" ] || \
    [ -n "${FD_RAW:-}" ] || \
+   [ -n "${FD_DEDICATED_THREADS:-}" ] || \
+   [ -n "${FD_THREAD_STACK_KB:-}" ] || \
+   [ -n "${FD_EPOLL:-}" ] || \
+   [ -n "${TCP_QUICKACK:-}" ] || \
    [ -n "${NATIVE_EPOLL:-}" ] || \
    [ -n "${FD_IMMEDIATE_READ:-}" ] || \
+   [ -n "${FD_PRE_READ:-}" ] || \
+   [ -n "${ASSUME_BODY_COMPLETE:-}" ] || \
+   [ -n "${ASSUME_FRAUD_SCORE_PATH:-}" ] || \
+   [ -n "${ASSUME_JSON_BODY_START:-}" ] || \
+   [ -n "${EPOLL_ET:-}" ] || \
+   [ -n "${PIN_FIRST_CPU:-}" ] || \
    [ -n "${FD_CONTROL_SEQPACKET:-}" ] || \
+   [ -n "${FD_CONTROL_PREBUFFER:-}" ] || \
+   [ -n "${LB_SOCKET_BUFFERS:-}" ] || \
+   [ -n "${LB_TCP_NODELAY:-}" ] || \
+   [ -n "${SOCKET_BUFFER_SIZE:-}" ] || \
    [ -n "${REFERENCE_FASTPATH_FRAUD_ONLY:-}" ] || \
    [ -n "${REFERENCE_FASTPATH_FRAUD_MIN_COUNT:-}" ] || \
    [ -n "${SERVER_MODE:-}" ] || \
@@ -151,6 +180,8 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${DOTNET_GCConserveMemory:-}" ] || \
    [ -n "${DOTNET_EnableDiagnostics:-}" ] || \
    [ -n "${GC_LATENCY_MODE:-}" ] || \
+   [ -n "${TP_PREWARM:-}" ] || \
+   [ -n "${TP_PREFER_LOCAL:-}" ] || \
    [ -n "${TP_MIN_THREADS:-}" ] || \
    [ -n "${TP_MIN_IO_THREADS:-}" ] || \
    [ -n "${TP_MAX_THREADS:-}" ] || \
@@ -171,14 +202,24 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
   OVERRIDE_FILE="${OVERRIDE_FILE_PATH:-${TMPDIR:-/tmp}/${PROJECT_NAME}.override.yml}"
   {
     echo "services:"
-    if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ] || [ -n "${LB_CPUSET:-}" ] || [ -n "${FD_CONTROL_SEQPACKET:-}" ] || [ -n "${TCP_DEFER_ACCEPT:-}" ] || [ -n "${LB_FAST2:-}" ] || [ -n "${LOGGING_NONE:-}" ]; then
+    if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ] || [ -n "${LB_CPUSET:-}" ] || [ -n "${FD_CONTROL_SEQPACKET:-}" ] || [ -n "${FD_CONTROL_PREBUFFER:-}" ] || [ -n "${EPOLL_ET:-}" ] || [ -n "${PIN_FIRST_CPU:-}" ] || [ -n "${TCP_DEFER_ACCEPT:-}" ] || [ -n "${LB_FAST2:-}" ] || [ -n "${LB_SOCKET_BUFFERS:-}" ] || [ -n "${LB_TCP_NODELAY:-}" ] || [ -n "${SOCKET_BUFFER_SIZE:-}" ] || [ -n "${SOCKETS_MOUNT:-}" ] || [ -n "${LOGGING_NONE:-}" ]; then
       echo "  lb:"
       [ -n "${LB_CPUSET:-}" ] && echo "    cpuset: \"$LB_CPUSET\""
-      if [ -n "${FD_CONTROL_SEQPACKET:-}" ] || [ -n "${TCP_DEFER_ACCEPT:-}" ] || [ -n "${LB_FAST2:-}" ]; then
+      if [ -n "${SOCKETS_MOUNT:-}" ]; then
+        echo "    volumes:"
+        echo "      - ${SOCKETS_MOUNT}"
+      fi
+      if [ -n "${FD_CONTROL_SEQPACKET:-}" ] || [ -n "${FD_CONTROL_PREBUFFER:-}" ] || [ -n "${EPOLL_ET:-}" ] || [ -n "${PIN_FIRST_CPU:-}" ] || [ -n "${TCP_DEFER_ACCEPT:-}" ] || [ -n "${LB_FAST2:-}" ] || [ -n "${LB_SOCKET_BUFFERS:-}" ] || [ -n "${LB_TCP_NODELAY:-}" ] || [ -n "${SOCKET_BUFFER_SIZE:-}" ]; then
         echo "    environment:"
         [ -n "${FD_CONTROL_SEQPACKET:-}" ] && echo "      FD_CONTROL_SEQPACKET: \"$FD_CONTROL_SEQPACKET\""
+        [ -n "${FD_CONTROL_PREBUFFER:-}" ] && echo "      FD_CONTROL_PREBUFFER: \"$FD_CONTROL_PREBUFFER\""
+        [ -n "${EPOLL_ET:-}" ] && echo "      EPOLL_ET: \"$EPOLL_ET\""
+        [ -n "${PIN_FIRST_CPU:-}" ] && echo "      PIN_FIRST_CPU: \"$PIN_FIRST_CPU\""
         [ -n "${TCP_DEFER_ACCEPT:-}" ] && echo "      TCP_DEFER_ACCEPT: \"$TCP_DEFER_ACCEPT\""
         [ -n "${LB_FAST2:-}" ] && echo "      LB_FAST2: \"$LB_FAST2\""
+        [ -n "${LB_SOCKET_BUFFERS:-}" ] && echo "      LB_SOCKET_BUFFERS: \"$LB_SOCKET_BUFFERS\""
+        [ -n "${LB_TCP_NODELAY:-}" ] && echo "      LB_TCP_NODELAY: \"$LB_TCP_NODELAY\""
+        [ -n "${SOCKET_BUFFER_SIZE:-}" ] && echo "      SOCKET_BUFFER_SIZE: \"$SOCKET_BUFFER_SIZE\""
       fi
       if [ -n "${LOGGING_NONE:-}" ]; then
         echo "    logging:"
@@ -193,14 +234,6 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       fi
     fi
 
-    if [ -n "${SOCKETS_MOUNT:-}" ]; then
-      for service in lb api1 api2; do
-        echo "  $service:"
-        echo "    volumes:"
-        echo "      - ${SOCKETS_MOUNT}"
-      done
-    fi
-
     for service in api1 api2; do
       service_cpuset="${API_CPUSET:-}"
       if [ "$service" = "api1" ] && [ -n "${API1_CPUSET:-}" ]; then
@@ -211,7 +244,12 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       fi
 
       echo "  $service:"
+      [ -n "${API_ENTRYPOINT:-}" ] && echo "    entrypoint: [\"$API_ENTRYPOINT\"]"
       [ -n "$service_cpuset" ] && echo "    cpuset: \"$service_cpuset\""
+      if [ -n "${SOCKETS_MOUNT:-}" ]; then
+        echo "    volumes:"
+        echo "      - ${SOCKETS_MOUNT}"
+      fi
       echo "    environment:"
       [ -n "${EARLY_CANDIDATES:-}" ] && echo "      EARLY_CANDIDATES: \"$EARLY_CANDIDATES\""
       [ -n "${MIN_CANDIDATES:-}" ] && echo "      MIN_CANDIDATES: \"$MIN_CANDIDATES\""
@@ -220,9 +258,22 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${PROFILE_MIN_COUNT:-}" ] && echo "      PROFILE_MIN_COUNT: \"$PROFILE_MIN_COUNT\""
       [ -n "${PROFILE_LEGIT_MIN_COUNT:-}" ] && echo "      PROFILE_LEGIT_MIN_COUNT: \"$PROFILE_LEGIT_MIN_COUNT\""
       [ -n "${PROFILE_FRAUD_MIN_COUNT:-}" ] && echo "      PROFILE_FRAUD_MIN_COUNT: \"$PROFILE_FRAUD_MIN_COUNT\""
+      [ -n "${PROFILE_FRAUD_AMOUNT_MIN:-}" ] && echo "      PROFILE_FRAUD_AMOUNT_MIN: \"$PROFILE_FRAUD_AMOUNT_MIN\""
+      [ -n "${PROFILE_FRAUD_LOW_AMOUNT_FASTPATH:-}" ] && echo "      PROFILE_FRAUD_LOW_AMOUNT_FASTPATH: \"$PROFILE_FRAUD_LOW_AMOUNT_FASTPATH\""
+      [ -n "${PROFILE_FRAUD_LOW_AMOUNT_KM_HOME_MIN:-}" ] && echo "      PROFILE_FRAUD_LOW_AMOUNT_KM_HOME_MIN: \"$PROFILE_FRAUD_LOW_AMOUNT_KM_HOME_MIN\""
+      [ -n "${PROFILE_FRAUD_LOW_AMOUNT_TX24H_MIN:-}" ] && echo "      PROFILE_FRAUD_LOW_AMOUNT_TX24H_MIN: \"$PROFILE_FRAUD_LOW_AMOUNT_TX24H_MIN\""
+      [ -n "${PROFILE_FRAUD_MID_AMOUNT_NO_LAST_FASTPATH:-}" ] && echo "      PROFILE_FRAUD_MID_AMOUNT_NO_LAST_FASTPATH: \"$PROFILE_FRAUD_MID_AMOUNT_NO_LAST_FASTPATH\""
+      [ -n "${PROFILE_FRAUD_MID_AMOUNT_MIN:-}" ] && echo "      PROFILE_FRAUD_MID_AMOUNT_MIN: \"$PROFILE_FRAUD_MID_AMOUNT_MIN\""
+      [ -n "${PROFILE_FRAUD_NO_LAST_ONLY:-}" ] && echo "      PROFILE_FRAUD_NO_LAST_ONLY: \"$PROFILE_FRAUD_NO_LAST_ONLY\""
       [ -n "${PROFILE_DOMINANT_FASTPATH:-}" ] && echo "      PROFILE_DOMINANT_FASTPATH: \"$PROFILE_DOMINANT_FASTPATH\""
       [ -n "${PROFILE_DOMINANT_MIN_COUNT:-}" ] && echo "      PROFILE_DOMINANT_MIN_COUNT: \"$PROFILE_DOMINANT_MIN_COUNT\""
       [ -n "${PROFILE_DOMINANT_MAX_OPPOSITE:-}" ] && echo "      PROFILE_DOMINANT_MAX_OPPOSITE: \"$PROFILE_DOMINANT_MAX_OPPOSITE\""
+      [ -n "${PROFILE_DOMINANT_LEGIT_ENABLED:-}" ] && echo "      PROFILE_DOMINANT_LEGIT_ENABLED: \"$PROFILE_DOMINANT_LEGIT_ENABLED\""
+      [ -n "${PROFILE_DOMINANT_FRAUD_ENABLED:-}" ] && echo "      PROFILE_DOMINANT_FRAUD_ENABLED: \"$PROFILE_DOMINANT_FRAUD_ENABLED\""
+      [ -n "${BUCKET_FASTPATH:-}" ] && echo "      BUCKET_FASTPATH: \"$BUCKET_FASTPATH\""
+      [ -n "${BUCKET_LEGIT_MIN_COUNT:-}" ] && echo "      BUCKET_LEGIT_MIN_COUNT: \"$BUCKET_LEGIT_MIN_COUNT\""
+      [ -n "${BUCKET_FRAUD_MIN_COUNT:-}" ] && echo "      BUCKET_FRAUD_MIN_COUNT: \"$BUCKET_FRAUD_MIN_COUNT\""
+      [ -n "${BUCKET_FRAUD_NO_LAST_ONLY:-}" ] && echo "      BUCKET_FRAUD_NO_LAST_ONLY: \"$BUCKET_FRAUD_NO_LAST_ONLY\""
       [ -n "${EXACT_FALLBACK:-}" ] && echo "      EXACT_FALLBACK: \"$EXACT_FALLBACK\""
       [ -n "${EARLY_EDGE_FALLBACK:-}" ] && echo "      EARLY_EDGE_FALLBACK: \"$EARLY_EDGE_FALLBACK\""
       [ -n "${RISKY_AMOUNT_MIN:-}" ] && echo "      RISKY_AMOUNT_MIN: \"$RISKY_AMOUNT_MIN\""
@@ -245,11 +296,23 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${KDTREE_MAX_PARTITIONS:-}" ] && echo "      KDTREE_MAX_PARTITIONS: \"$KDTREE_MAX_PARTITIONS\""
       [ -n "${BLOCK_SCAN:-}" ] && echo "      BLOCK_SCAN: \"$BLOCK_SCAN\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
+      [ -n "${NATIVE_WORKERS:-}" ] && echo "      NATIVE_WORKERS: \"$NATIVE_WORKERS\""
       [ -n "${FD_RECEIVERS:-}" ] && echo "      FD_RECEIVERS: \"$FD_RECEIVERS\""
       [ -n "${FD_RAW:-}" ] && echo "      FD_RAW: \"$FD_RAW\""
+      [ -n "${FD_DEDICATED_THREADS:-}" ] && echo "      FD_DEDICATED_THREADS: \"$FD_DEDICATED_THREADS\""
+      [ -n "${FD_THREAD_STACK_KB:-}" ] && echo "      FD_THREAD_STACK_KB: \"$FD_THREAD_STACK_KB\""
+      [ -n "${FD_EPOLL:-}" ] && echo "      FD_EPOLL: \"$FD_EPOLL\""
+      [ -n "${TCP_QUICKACK:-}" ] && echo "      TCP_QUICKACK: \"$TCP_QUICKACK\""
       [ -n "${NATIVE_EPOLL:-}" ] && echo "      NATIVE_EPOLL: \"$NATIVE_EPOLL\""
       [ -n "${FD_IMMEDIATE_READ:-}" ] && echo "      FD_IMMEDIATE_READ: \"$FD_IMMEDIATE_READ\""
+      [ -n "${FD_PRE_READ:-}" ] && echo "      FD_PRE_READ: \"$FD_PRE_READ\""
+      [ -n "${ASSUME_BODY_COMPLETE:-}" ] && echo "      ASSUME_BODY_COMPLETE: \"$ASSUME_BODY_COMPLETE\""
+      [ -n "${ASSUME_FRAUD_SCORE_PATH:-}" ] && echo "      ASSUME_FRAUD_SCORE_PATH: \"$ASSUME_FRAUD_SCORE_PATH\""
+      [ -n "${ASSUME_JSON_BODY_START:-}" ] && echo "      ASSUME_JSON_BODY_START: \"$ASSUME_JSON_BODY_START\""
+      [ -n "${EPOLL_ET:-}" ] && echo "      EPOLL_ET: \"$EPOLL_ET\""
+      [ -n "${PIN_FIRST_CPU:-}" ] && echo "      PIN_FIRST_CPU: \"$PIN_FIRST_CPU\""
       [ -n "${FD_CONTROL_SEQPACKET:-}" ] && echo "      FD_CONTROL_SEQPACKET: \"$FD_CONTROL_SEQPACKET\""
+      [ -n "${FD_CONTROL_PREBUFFER:-}" ] && echo "      FD_CONTROL_PREBUFFER: \"$FD_CONTROL_PREBUFFER\""
       [ -n "${REFERENCE_FASTPATH_FRAUD_ONLY:-}" ] && echo "      REFERENCE_FASTPATH_FRAUD_ONLY: \"$REFERENCE_FASTPATH_FRAUD_ONLY\""
       [ -n "${REFERENCE_FASTPATH_FRAUD_MIN_COUNT:-}" ] && echo "      REFERENCE_FASTPATH_FRAUD_MIN_COUNT: \"$REFERENCE_FASTPATH_FRAUD_MIN_COUNT\""
       [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""
@@ -261,6 +324,8 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${DOTNET_GCConserveMemory:-}" ] && echo "      DOTNET_GCConserveMemory: \"$DOTNET_GCConserveMemory\""
       [ -n "${DOTNET_EnableDiagnostics:-}" ] && echo "      DOTNET_EnableDiagnostics: \"$DOTNET_EnableDiagnostics\""
       [ -n "${GC_LATENCY_MODE:-}" ] && echo "      GC_LATENCY_MODE: \"$GC_LATENCY_MODE\""
+      [ -n "${TP_PREWARM:-}" ] && echo "      TP_PREWARM: \"$TP_PREWARM\""
+      [ -n "${TP_PREFER_LOCAL:-}" ] && echo "      TP_PREFER_LOCAL: \"$TP_PREFER_LOCAL\""
       [ -n "${TP_MIN_THREADS:-}" ] && echo "      TP_MIN_THREADS: \"$TP_MIN_THREADS\""
       [ -n "${TP_MIN_IO_THREADS:-}" ] && echo "      TP_MIN_IO_THREADS: \"$TP_MIN_IO_THREADS\""
       [ -n "${TP_MAX_THREADS:-}" ] && echo "      TP_MAX_THREADS: \"$TP_MAX_THREADS\""
@@ -320,5 +385,6 @@ docker run --rm \
   -e PRE_ALLOCATED_VUS \
   -e MAX_VUS \
   -e REQUEST_TIMEOUT \
+  -e DUMP_MISMATCHES \
   -v "$TEST_MOUNT:/scripts" \
   "$K6_IMAGE" run /scripts/rinha-test.js

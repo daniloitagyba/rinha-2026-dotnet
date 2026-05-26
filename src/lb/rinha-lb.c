@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/tcp.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,8 +15,11 @@
 #include <unistd.h>
 
 #define BUFFER_SIZE 16384
+#define FDPASS_PREBUFFER_SIZE 8192
 #define MAX_BACKENDS 8
+#ifndef MAX_EVENTS
 #define MAX_EVENTS 1024
+#endif
 
 static const char *backend_paths[MAX_BACKENDS] = {
     "/sockets/api1.sock",
@@ -57,6 +61,12 @@ static int control_fds[MAX_BACKENDS];
 static char upstreams_storage[1024];
 static int fd_control_seqpacket = 0;
 static int lb_fast2 = 0;
+static int lb_socket_buffers = 1;
+static int lb_tcp_nodelay = 1;
+static int lb_fdpass_nonblock = 0;
+static int fd_control_prebuffer = 0;
+static int epoll_et = 0;
+static int socket_buffer_size = 16384;
 
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -85,11 +95,29 @@ static int env_enabled(const char *name, int fallback) {
            strcmp(value, "NO") != 0;
 }
 
+static void pin_first_allowed_cpu(void) {
+    cpu_set_t current;
+    if (sched_getaffinity(0, sizeof(current), &current) != 0) {
+        return;
+    }
+
+    for (int cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+        if (CPU_ISSET(cpu, &current)) {
+            cpu_set_t pinned;
+            CPU_ZERO(&pinned);
+            CPU_SET(cpu, &pinned);
+            (void)sched_setaffinity(0, sizeof(pinned), &pinned);
+            return;
+        }
+    }
+}
+
 static void set_small_socket_buffers(int fd) {
-    int value = 16384;
+    int value = socket_buffer_size;
     (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, sizeof(value));
     (void)setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &value, sizeof(value));
 }
+
 
 static unsigned int choose_backend(void) {
     unsigned int backend = next_backend;
@@ -261,11 +289,16 @@ static int ensure_control(unsigned int index) {
     return fd;
 }
 
-static int send_fd(int control_fd, int fd_to_send) {
+static int send_fd(int control_fd, int fd_to_send, const unsigned char *prebuffer, size_t prebuffer_length) {
     char data = 0;
     struct iovec io;
-    io.iov_base = &data;
-    io.iov_len = 1;
+    if (prebuffer_length > 0) {
+        io.iov_base = (void *)prebuffer;
+        io.iov_len = prebuffer_length;
+    } else {
+        io.iov_base = &data;
+        io.iov_len = 1;
+    }
 
     char cmsgbuf[CMSG_SPACE(sizeof(int))];
     memset(cmsgbuf, 0, sizeof(cmsgbuf));
@@ -286,7 +319,7 @@ static int send_fd(int control_fd, int fd_to_send) {
 
     for (;;) {
         ssize_t sent = sendmsg(control_fd, &msg, MSG_NOSIGNAL);
-        if (sent == 1) {
+        if (sent == (ssize_t)io.iov_len) {
             return 0;
         }
 
@@ -342,8 +375,12 @@ static void accept_clients(int epoll_fd, int listener) {
             return;
         }
 
-        set_tcp_nodelay(client_fd);
-        set_small_socket_buffers(client_fd);
+        if (lb_tcp_nodelay) {
+            set_tcp_nodelay(client_fd);
+        }
+        if (lb_socket_buffers) {
+            set_small_socket_buffers(client_fd);
+        }
 
         int backend_fd = connect_backend(choose_backend());
         if (backend_fd < 0) {
@@ -373,9 +410,12 @@ static void accept_clients(int epoll_fd, int listener) {
     }
 }
 
+static size_t try_prebuffer_client(int client_fd, unsigned char *buffer, size_t capacity);
+
 static void accept_clients_fdpass(int listener) {
     for (;;) {
-        int client_fd = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
+        int accept_flags = SOCK_CLOEXEC | (lb_fdpass_nonblock ? SOCK_NONBLOCK : 0);
+        int client_fd = accept4(listener, NULL, NULL, accept_flags);
         if (client_fd < 0) {
             if (errno == EINTR) {
                 continue;
@@ -389,13 +429,20 @@ static void accept_clients_fdpass(int listener) {
             return;
         }
 
-        set_tcp_nodelay(client_fd);
-        set_small_socket_buffers(client_fd);
+        if (lb_tcp_nodelay) {
+            set_tcp_nodelay(client_fd);
+        }
+        if (lb_socket_buffers) {
+            set_small_socket_buffers(client_fd);
+        }
+
+        unsigned char prebuffer[FDPASS_PREBUFFER_SIZE];
+        size_t prebuffer_length = try_prebuffer_client(client_fd, prebuffer, sizeof(prebuffer));
 
         if (lb_fast2 && backend_count == 2) {
             unsigned int index = choose_backend() & 1U;
             int control_fd = ensure_control(index);
-            if (control_fd >= 0 && send_fd(control_fd, client_fd) == 0) {
+            if (control_fd >= 0 && send_fd(control_fd, client_fd, prebuffer, prebuffer_length) == 0) {
                 close(client_fd);
                 continue;
             }
@@ -407,7 +454,7 @@ static void accept_clients_fdpass(int listener) {
 
             index ^= 1U;
             control_fd = ensure_control(index);
-            if (control_fd >= 0 && send_fd(control_fd, client_fd) == 0) {
+            if (control_fd >= 0 && send_fd(control_fd, client_fd, prebuffer, prebuffer_length) == 0) {
                 close(client_fd);
                 continue;
             }
@@ -426,7 +473,7 @@ static void accept_clients_fdpass(int listener) {
         for (unsigned int attempt = 0; attempt < backend_count; attempt++) {
             unsigned int index = (start + attempt) % backend_count;
             int control_fd = ensure_control(index);
-            if (control_fd >= 0 && send_fd(control_fd, client_fd) == 0) {
+            if (control_fd >= 0 && send_fd(control_fd, client_fd, prebuffer, prebuffer_length) == 0) {
                 delivered = 1;
                 break;
             }
@@ -441,6 +488,29 @@ static void accept_clients_fdpass(int listener) {
         if (!delivered) {
             continue;
         }
+    }
+}
+
+static size_t try_prebuffer_client(int client_fd, unsigned char *buffer, size_t capacity) {
+    if (!fd_control_prebuffer || !fd_control_seqpacket) {
+        return 0;
+    }
+
+    for (;;) {
+        ssize_t got = recv(client_fd, buffer, capacity, MSG_DONTWAIT);
+        if (got > 0) {
+            return (size_t)got;
+        }
+
+        if (got == 0) {
+            return 0;
+        }
+
+        if (errno == EINTR) {
+            continue;
+        }
+
+        return 0;
     }
 }
 
@@ -459,7 +529,7 @@ static int run_fdpass(int listener, int port) {
 
     struct epoll_event listener_event;
     memset(&listener_event, 0, sizeof(listener_event));
-    listener_event.events = EPOLLIN;
+    listener_event.events = EPOLLIN | (epoll_et ? EPOLLET : 0);
     listener_event.data.ptr = &listener_state;
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listener, &listener_event) < 0) {
         perror("epoll_ctl");
@@ -635,6 +705,9 @@ static int create_listener(int port) {
 
 int main(void) {
     signal(SIGPIPE, SIG_IGN);
+    if (env_enabled("PIN_FIRST_CPU", 0)) {
+        pin_first_allowed_cpu();
+    }
 
     int port = 9999;
     const char *port_env = getenv("LB_PORT");
@@ -652,6 +725,18 @@ int main(void) {
     int fdpass_mode = mode != NULL && strcmp(mode, "fdpass") == 0;
     fd_control_seqpacket = env_enabled("FD_CONTROL_SEQPACKET", 0);
     lb_fast2 = env_enabled("LB_FAST2", 0);
+    lb_socket_buffers = env_enabled("LB_SOCKET_BUFFERS", 1);
+    lb_tcp_nodelay = env_enabled("LB_TCP_NODELAY", 1);
+    lb_fdpass_nonblock = env_enabled("LB_FDPASS_NONBLOCK", 0);
+    fd_control_prebuffer = env_enabled("FD_CONTROL_PREBUFFER", 0);
+    epoll_et = env_enabled("EPOLL_ET", 0);
+    const char *buffer_env = getenv("SOCKET_BUFFER_SIZE");
+    if (buffer_env != NULL && *buffer_env != '\0') {
+        int parsed = atoi(buffer_env);
+        if (parsed > 0) {
+            socket_buffer_size = parsed;
+        }
+    }
     init_backends(fdpass_mode);
 
     if (fdpass_mode) {

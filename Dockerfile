@@ -11,23 +11,26 @@ RUN case "$TARGETARCH" in \
       *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
     esac \
     && dotnet publish src/RinhaFraud/RinhaFraud.csproj -c Release -r "$RID" -o /out/app
+ARG NATIVE_CFLAGS_EXTRA=""
 RUN mkdir -p /out/lb \
-    && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -pthread -o /out/lb/rinha-lb src/lb/rinha-lb.c
+    && clang -O3 -DNDEBUG -march=haswell -mtune=haswell $NATIVE_CFLAGS_EXTRA -pthread -o /out/lb/rinha-lb src/lb/rinha-lb.c
+ARG KDTREE_KEY_PROFILE=0
 RUN mkdir -p /out/native \
-    && clang -O3 -DNDEBUG -march=haswell -mtune=haswell -fPIC -shared -o /out/native/librinha_native.so src/native/rinha_native.c
+    && clang -O3 -DNDEBUG -march=haswell -mtune=haswell $NATIVE_CFLAGS_EXTRA -DKDTREE_KEY_PROFILE="$KDTREE_KEY_PROFILE" -fPIC -shared -o /out/native/librinha_native.so src/native/rinha_native.c
+RUN clang -O3 -DNDEBUG -march=haswell -mtune=haswell $NATIVE_CFLAGS_EXTRA -DKDTREE_KEY_PROFILE="$KDTREE_KEY_PROFILE" -pthread -o /out/native/rinha-native-api src/native/rinha_native_api.c src/native/rinha_native.c
 ARG BUILD_BLOCK_INDEX=0
 ARG BUILD_NATIVE_ONLY_INDEX=1
 ARG BUILD_KDTREE_INDEX=1
-ARG KDTREE_LEAF_SIZE=128
+ARG KDTREE_LEAF_SIZE=96
 RUN mkdir -p /out/data \
     && if [ -f resources/references.json.gz ]; then \
-         gzip -dc resources/references.json.gz | BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" BUILD_NATIVE_ONLY_INDEX="$BUILD_NATIVE_ONLY_INDEX" BUILD_KDTREE_INDEX="$BUILD_KDTREE_INDEX" KDTREE_LEAF_SIZE="$KDTREE_LEAF_SIZE" /out/app/RinhaFraud build-index /out/data/references.idx ; \
+         gzip -dc resources/references.json.gz | BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" BUILD_NATIVE_ONLY_INDEX="$BUILD_NATIVE_ONLY_INDEX" BUILD_KDTREE_INDEX="$BUILD_KDTREE_INDEX" KDTREE_LEAF_SIZE="$KDTREE_LEAF_SIZE" KDTREE_KEY_PROFILE="$KDTREE_KEY_PROFILE" /out/app/RinhaFraud build-index /out/data/references.idx ; \
        elif [ -f data/references.idx ]; then \
          cp data/references.idx /out/data/references.idx ; \
        else \
          curl -fsSL https://raw.githubusercontent.com/zanfranceschi/rinha-de-backend-2026/main/resources/references.json.gz \
            | gzip -dc \
-           | BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" BUILD_NATIVE_ONLY_INDEX="$BUILD_NATIVE_ONLY_INDEX" BUILD_KDTREE_INDEX="$BUILD_KDTREE_INDEX" KDTREE_LEAF_SIZE="$KDTREE_LEAF_SIZE" /out/app/RinhaFraud build-index /out/data/references.idx ; \
+           | BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" BUILD_NATIVE_ONLY_INDEX="$BUILD_NATIVE_ONLY_INDEX" BUILD_KDTREE_INDEX="$BUILD_KDTREE_INDEX" KDTREE_LEAF_SIZE="$KDTREE_LEAF_SIZE" KDTREE_KEY_PROFILE="$KDTREE_KEY_PROFILE" /out/app/RinhaFraud build-index /out/data/references.idx ; \
        fi \
     && test -s /out/data/references.idx
 
@@ -37,6 +40,7 @@ WORKDIR /app
 COPY --from=builder /out/app/RinhaFraud /usr/local/bin/rinha-fraud
 COPY --from=builder /out/lb/rinha-lb /usr/local/bin/rinha-lb
 COPY --from=builder /out/native/librinha_native.so /usr/local/lib/librinha_native.so
+COPY --from=builder /out/native/rinha-native-api /usr/local/bin/rinha-native-api
 COPY --from=builder /out/data /app/data
 
 ENV LD_LIBRARY_PATH=/usr/local/lib

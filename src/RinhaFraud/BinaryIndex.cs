@@ -50,6 +50,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private const int KdVectorStride = 16;
     private const int KdPartitionRecordSize = 72;
     private const int KdNodeRecordSize = 80;
+    private const int KdStatsLength = 9;
 
     private readonly MemoryMappedFile _mappedFile;
     private readonly MemoryMappedViewAccessor _accessor;
@@ -62,6 +63,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly long _profileCountsOffset;
     private readonly long _profileLabelMasksOffset;
     private readonly long _profileFraudCountsOffset;
+    private GCHandle _bucketCountsHandle;
+    private GCHandle _bucketFraudCountsHandle;
     private readonly ushort[] _profileCounts;
     private readonly ushort[] _profileFraudCounts;
     private readonly byte[] _profileLabelMasks;
@@ -119,6 +122,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
         long profileCountsOffset,
         long profileLabelMasksOffset,
         long profileFraudCountsOffset,
+        uint[] bucketCounts,
+        uint[] bucketFraudCounts,
         ushort[] profileCounts,
         ushort[] profileFraudCounts,
         byte[] profileLabelMasks,
@@ -172,6 +177,16 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _profileCountsOffset = profileCountsOffset;
         _profileLabelMasksOffset = profileLabelMasksOffset;
         _profileFraudCountsOffset = profileFraudCountsOffset;
+        if (bucketCounts.Length != 0)
+        {
+            _bucketCountsHandle = GCHandle.Alloc(bucketCounts, GCHandleType.Pinned);
+        }
+
+        if (bucketFraudCounts.Length != 0)
+        {
+            _bucketFraudCountsHandle = GCHandle.Alloc(bucketFraudCounts, GCHandleType.Pinned);
+        }
+
         _profileCounts = profileCounts;
         _profileFraudCounts = profileFraudCounts;
         _profileLabelMasks = profileLabelMasks;
@@ -292,6 +307,18 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var sections = version >= 2 && extensionDirectoryOffset != 0
                 ? ReadExtensionSections(ptr, fileLength, extensionDirectoryOffset)
                 : default;
+
+            uint[] bucketCounts;
+            uint[] bucketFraudCounts;
+            if (EnvBool("BUCKET_FASTPATH", false))
+            {
+                BuildBucketLabelStats(ptr, count, labelsOffset, bucketOffsetsOffset, out bucketCounts, out bucketFraudCounts);
+            }
+            else
+            {
+                bucketCounts = Array.Empty<uint>();
+                bucketFraudCounts = Array.Empty<uint>();
+            }
 
             ushort[] profileCounts;
             ushort[] profileFraudCounts;
@@ -432,6 +459,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 profileCountsOffset,
                 profileLabelMasksOffset,
                 profileFraudCountsOffset,
+                bucketCounts,
+                bucketFraudCounts,
                 profileCounts,
                 profileFraudCounts,
                 profileLabelMasks,
@@ -557,7 +586,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
 
         try
         {
-            return madvise((nint)_ptr, (nuint)_length, MadvHugePage) == 0 ? _length : 0;
+            return madvise(_ptr, (UIntPtr)_length, MadvHugePage) == 0 ? _length : 0;
         }
         catch (DllNotFoundException)
         {
@@ -690,6 +719,124 @@ internal unsafe sealed class BinaryIndex : IDisposable
     }
 
     [SkipLocalsInit]
+    public bool TryClassifyFraudCountJson(ReadOnlySpan<byte> body, out int fraudCount)
+    {
+        return TryClassifyFraudCountJson(body, default, out fraudCount);
+    }
+
+    [SkipLocalsInit]
+    public bool TryClassifyFraudCountJson(ReadOnlySpan<byte> body, in SearchParams searchParams, out int fraudCount)
+    {
+        fraudCount = 0;
+        if (!_useNativeKd || body.IsEmpty)
+        {
+            return false;
+        }
+
+        fixed (byte* bodyPtr = body)
+        {
+            var useProfileNative = searchParams.ProfileFastPath && _profileCountsOffset != 0 && _profileLabelMasksOffset != 0;
+            var useBucketNative = searchParams.BucketFastPath && _bucketCountsHandle.IsAllocated && _bucketFraudCountsHandle.IsAllocated;
+            var result = useProfileNative || useBucketNative
+                ? NativeClassifyJsonProfileKdTreeAvx2(
+                    _ptr + _kdPartitionsOffset,
+                    _ptr + _kdNodesOffset,
+                    (short*)(_ptr + _kdVectorsOffset),
+                    _ptr + _kdLabelsOffset,
+                    (int*)(_ptr + _kdIdsOffset),
+                    _bucketCountsHandle.IsAllocated ? (uint*)_bucketCountsHandle.AddrOfPinnedObject() : null,
+                    _bucketFraudCountsHandle.IsAllocated ? (uint*)_bucketFraudCountsHandle.AddrOfPinnedObject() : null,
+                    useProfileNative ? (ushort*)(_ptr + _profileCountsOffset) : null,
+                    useProfileNative ? (ushort*)(_ptr + _profileFraudCountsOffset) : null,
+                    useProfileNative ? _ptr + _profileLabelMasksOffset : null,
+                    bodyPtr,
+                    body.Length,
+                    _kdNodeCount,
+                    _kdMaxPartitions,
+                    useProfileNative ? 1 : 0,
+                    searchParams.ProfileLegitMinCount,
+                    searchParams.ProfileFraudMinCount,
+                    searchParams.ProfileFraudAmountMin,
+                    searchParams.ProfileFraudLowAmountFastPath ? 1 : 0,
+                    searchParams.ProfileFraudLowAmountKmHomeMin,
+                    searchParams.ProfileFraudLowAmountTx24hMin,
+                    searchParams.ProfileFraudMidAmountNoLastFastPath ? 1 : 0,
+                    searchParams.ProfileFraudMidAmountMin,
+                    searchParams.ProfileFraudNoLastOnly ? 1 : 0,
+                    searchParams.ProfileDominantFastPath ? 1 : 0,
+                    searchParams.ProfileDominantMinCount,
+                    searchParams.ProfileDominantMaxOpposite,
+                    searchParams.ProfileDominantLegitEnabled ? 1 : 0,
+                    searchParams.ProfileDominantFraudEnabled ? 1 : 0,
+                    useBucketNative ? 1 : 0,
+                    searchParams.BucketLegitMinCount,
+                    searchParams.BucketFraudMinCount,
+                    searchParams.BucketFraudNoLastOnly ? 1 : 0)
+                : NativeClassifyJsonKdTreeAvx2(
+                    _ptr + _kdPartitionsOffset,
+                    _ptr + _kdNodesOffset,
+                    (short*)(_ptr + _kdVectorsOffset),
+                    _ptr + _kdLabelsOffset,
+                    (int*)(_ptr + _kdIdsOffset),
+                    bodyPtr,
+                    body.Length,
+                    _kdNodeCount,
+                    _kdMaxPartitions);
+            if (result < 0)
+            {
+                return false;
+            }
+
+            fraudCount = result;
+            return true;
+        }
+    }
+
+    [SkipLocalsInit]
+    private int ClassifyNativeKdWithStats(ReadOnlySpan<short> query, Span<int> stats)
+    {
+        stats.Clear();
+        if (query.Length >= KdVectorStride)
+        {
+            fixed (short* queryPtr = query)
+            fixed (int* statsPtr = stats)
+            {
+                return NativeClassifyKdTreeStatsAvx2(
+                    _ptr + _kdPartitionsOffset,
+                    _ptr + _kdNodesOffset,
+                    (short*)(_ptr + _kdVectorsOffset),
+                    _ptr + _kdLabelsOffset,
+                    (int*)(_ptr + _kdIdsOffset),
+                    queryPtr,
+                    _kdNodeCount,
+                    _kdMaxPartitions,
+                    statsPtr,
+                    stats.Length);
+            }
+        }
+
+        Span<short> paddedQuery = stackalloc short[KdVectorStride];
+        paddedQuery.Clear();
+        query[..Math.Min(query.Length, Constants.Dim)].CopyTo(paddedQuery);
+
+        fixed (short* queryPtr = paddedQuery)
+        fixed (int* statsPtr = stats)
+        {
+            return NativeClassifyKdTreeStatsAvx2(
+                _ptr + _kdPartitionsOffset,
+                _ptr + _kdNodesOffset,
+                (short*)(_ptr + _kdVectorsOffset),
+                _ptr + _kdLabelsOffset,
+                (int*)(_ptr + _kdIdsOffset),
+                queryPtr,
+                _kdNodeCount,
+                _kdMaxPartitions,
+                statsPtr,
+                stats.Length);
+        }
+    }
+
+    [SkipLocalsInit]
     public ClassificationDiagnostics ClassifyFraudCountWithDiagnostics(ReadOnlySpan<short> query, in SearchParams searchParams)
     {
         var started = Stopwatch.GetTimestamp();
@@ -723,14 +870,24 @@ internal unsafe sealed class BinaryIndex : IDisposable
 
         if (_useNativeKd)
         {
+            Span<int> kdStats = stackalloc int[KdStatsLength];
+            var kdFrauds = ClassifyNativeKdWithStats(query, kdStats);
             return Diagnostic(
-                ClassifyNativeKd(query),
+                kdFrauds,
                 ClassificationPath.NativeKdTree,
                 profileKey,
                 primaryBucket,
-                candidates: 0,
-                fallbackCandidates: 0,
-                started);
+                candidates: kdStats[6],
+                fallbackCandidates: kdStats[1],
+                started,
+                kdSearchedPartitions: kdStats[1],
+                kdCandidatePartitions: kdStats[2],
+                kdVisitedNodes: kdStats[3],
+                kdPrunedNodes: kdStats[4],
+                kdScannedLeaves: kdStats[5],
+                kdScannedVectors: kdStats[6],
+                kdMaxStackDepth: kdStats[7],
+                kdPrimaryPartition: kdStats[8]);
         }
 
         Span<long> topDist = stackalloc long[Constants.K];
@@ -1521,7 +1678,15 @@ internal unsafe sealed class BinaryIndex : IDisposable
         int primaryBucket,
         int candidates,
         int fallbackCandidates,
-        long started)
+        long started,
+        int kdSearchedPartitions = 0,
+        int kdCandidatePartitions = 0,
+        int kdVisitedNodes = 0,
+        int kdPrunedNodes = 0,
+        int kdScannedLeaves = 0,
+        int kdScannedVectors = 0,
+        int kdMaxStackDepth = 0,
+        int kdPrimaryPartition = -1)
     {
         return new ClassificationDiagnostics(
             fraudCount,
@@ -1530,7 +1695,15 @@ internal unsafe sealed class BinaryIndex : IDisposable
             primaryBucket,
             candidates,
             fallbackCandidates,
-            Stopwatch.GetTimestamp() - started);
+            Stopwatch.GetTimestamp() - started,
+            kdSearchedPartitions,
+            kdCandidatePartitions,
+            kdVisitedNodes,
+            kdPrunedNodes,
+            kdScannedLeaves,
+            kdScannedVectors,
+            kdMaxStackDepth,
+            kdPrimaryPartition);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1679,7 +1852,9 @@ internal unsafe sealed class BinaryIndex : IDisposable
 
         if (mask == FraudMask)
         {
-            if (profileCount < searchParams.ProfileFraudMinCount)
+            if (profileCount < searchParams.ProfileFraudMinCount ||
+                !ProfileFraudAmountAllowed(query, searchParams) ||
+                (searchParams.ProfileFraudNoLastOnly && query[5] >= 0))
             {
                 return false;
             }
@@ -1692,14 +1867,18 @@ internal unsafe sealed class BinaryIndex : IDisposable
         {
             var profileFrauds = ProfileFraudCount(key);
             var profileLegits = Math.Max(0, profileCount - profileFrauds);
-            if (profileFrauds >= searchParams.ProfileDominantMinCount &&
-                profileLegits <= searchParams.ProfileDominantMaxOpposite)
+            if (searchParams.ProfileDominantFraudEnabled &&
+                profileFrauds >= searchParams.ProfileDominantMinCount &&
+                profileLegits <= searchParams.ProfileDominantMaxOpposite &&
+                ProfileFraudAmountAllowed(query, searchParams) &&
+                (!searchParams.ProfileFraudNoLastOnly || query[5] < 0))
             {
                 fraudCount = Constants.K;
                 return true;
             }
 
-            if (profileLegits >= searchParams.ProfileDominantMinCount &&
+            if (searchParams.ProfileDominantLegitEnabled &&
+                profileLegits >= searchParams.ProfileDominantMinCount &&
                 profileFrauds <= searchParams.ProfileDominantMaxOpposite)
             {
                 fraudCount = 0;
@@ -1708,6 +1887,28 @@ internal unsafe sealed class BinaryIndex : IDisposable
         }
 
         return false;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ProfileFraudAmountAllowed(ReadOnlySpan<short> query, in SearchParams searchParams)
+    {
+        if (query[0] >= searchParams.ProfileFraudAmountMin)
+        {
+            return true;
+        }
+
+        if (searchParams.ProfileFraudMidAmountNoLastFastPath &&
+            query[0] >= searchParams.ProfileFraudMidAmountMin &&
+            query[5] < 0)
+        {
+            return true;
+        }
+
+        return searchParams.ProfileFraudLowAmountFastPath &&
+               ((query[7] >= searchParams.ProfileFraudLowAmountKmHomeMin &&
+                 query[8] >= searchParams.ProfileFraudLowAmountTx24hMin) ||
+                query[7] >= 5500 ||
+                query[8] >= 6250);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2500,6 +2701,37 @@ internal unsafe sealed class BinaryIndex : IDisposable
         }
     }
 
+    private static void BuildBucketLabelStats(
+        byte* ptr,
+        int count,
+        long labelsOffset,
+        long bucketOffsetsOffset,
+        out uint[] counts,
+        out uint[] fraudCounts)
+    {
+        counts = new uint[Constants.BucketCount];
+        fraudCounts = new uint[Constants.BucketCount];
+
+        for (var key = 0; key < Constants.BucketCount; key++)
+        {
+            var start = Unsafe.ReadUnaligned<uint>(ptr + bucketOffsetsOffset + key * 4L);
+            var end = Unsafe.ReadUnaligned<uint>(ptr + bucketOffsetsOffset + (key + 1) * 4L);
+            if (end < start || end > (uint)count)
+            {
+                throw new InvalidOperationException("bucket offsets out of bounds");
+            }
+
+            counts[key] = end - start;
+            uint frauds = 0;
+            for (var pos = start; pos < end; pos++)
+            {
+                frauds += *(ptr + labelsOffset + pos) != 0 ? 1u : 0u;
+            }
+
+            fraudCounts[key] = frauds;
+        }
+    }
+
     private static void BuildRiskyFallbackIndex(
         byte* ptr,
         int count,
@@ -2768,9 +3000,10 @@ internal unsafe sealed class BinaryIndex : IDisposable
     }
 
     [DllImport("libc", EntryPoint = "madvise", SetLastError = true)]
-    private static extern int madvise(nint address, nuint length, int advice);
+    private static extern int madvise(byte* address, UIntPtr length, int advice);
 
     [DllImport("rinha_native", EntryPoint = "rinha_classify_kdtree_avx2")]
+    [SuppressGCTransition]
     private static extern int NativeClassifyKdTreeAvx2(
         byte* partitions,
         byte* nodes,
@@ -2781,7 +3014,72 @@ internal unsafe sealed class BinaryIndex : IDisposable
         int nodeCount,
         int maxPartitions);
 
+    [DllImport("rinha_native", EntryPoint = "rinha_classify_json_kdtree_avx2")]
+    [SuppressGCTransition]
+    private static extern int NativeClassifyJsonKdTreeAvx2(
+        byte* partitions,
+        byte* nodes,
+        short* vectors,
+        byte* labels,
+        int* ids,
+        byte* body,
+        int bodyLength,
+        int nodeCount,
+        int maxPartitions);
+
+    [DllImport("rinha_native", EntryPoint = "rinha_classify_json_profile_kdtree_avx2")]
+    [SuppressGCTransition]
+    private static extern int NativeClassifyJsonProfileKdTreeAvx2(
+        byte* partitions,
+        byte* nodes,
+        short* vectors,
+        byte* labels,
+        int* ids,
+        uint* bucketCounts,
+        uint* bucketFraudCounts,
+        ushort* profileCounts,
+        ushort* profileFraudCounts,
+        byte* profileMasks,
+        byte* body,
+        int bodyLength,
+        int nodeCount,
+        int maxPartitions,
+        int profileFastPath,
+        int profileLegitMinCount,
+        int profileFraudMinCount,
+        int profileFraudAmountMin,
+        int profileFraudLowAmountFastPath,
+        int profileFraudLowAmountKmHomeMin,
+        int profileFraudLowAmountTx24hMin,
+        int profileFraudMidAmountNoLastFastPath,
+        int profileFraudMidAmountMin,
+        int profileFraudNoLastOnly,
+        int profileDominantFastPath,
+        int profileDominantMinCount,
+        int profileDominantMaxOpposite,
+        int profileDominantLegitEnabled,
+        int profileDominantFraudEnabled,
+        int bucketFastPath,
+        int bucketLegitMinCount,
+        int bucketFraudMinCount,
+        int bucketFraudNoLastOnly);
+
+    [DllImport("rinha_native", EntryPoint = "rinha_classify_kdtree_stats_avx2")]
+    [SuppressGCTransition]
+    private static extern int NativeClassifyKdTreeStatsAvx2(
+        byte* partitions,
+        byte* nodes,
+        short* vectors,
+        byte* labels,
+        int* ids,
+        short* query,
+        int nodeCount,
+        int maxPartitions,
+        int* stats,
+        int statsLength);
+
     [DllImport("rinha_native", EntryPoint = "rinha_consider_ann_avx2")]
+    [SuppressGCTransition]
     private static extern int NativeConsiderAnnAvx2(
         short* vectors,
         byte* labels,
@@ -2796,6 +3094,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         byte* topLabel);
 
     [DllImport("rinha_native", EntryPoint = "rinha_classify_ann_avx2")]
+    [SuppressGCTransition]
     private static extern int NativeClassifyAnnAvx2(
         short* vectors,
         byte* labels,
@@ -2808,6 +3107,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         int earlyEdgeFallback);
 
     [DllImport("rinha_native", EntryPoint = "rinha_consider_risky_fine_avx2")]
+    [SuppressGCTransition]
     private static extern int NativeConsiderRiskyFineAvx2(
         short* vectors,
         byte* labels,
@@ -2895,6 +3195,18 @@ internal unsafe sealed class BinaryIndex : IDisposable
 
     public void Dispose()
     {
+        if (_bucketCountsHandle.IsAllocated)
+        {
+            _bucketCountsHandle.Free();
+            _bucketCountsHandle = default;
+        }
+
+        if (_bucketFraudCountsHandle.IsAllocated)
+        {
+            _bucketFraudCountsHandle.Free();
+            _bucketFraudCountsHandle = default;
+        }
+
         if (_ptr != null)
         {
             _accessor.SafeMemoryMappedViewHandle.ReleasePointer();

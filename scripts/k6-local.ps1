@@ -12,9 +12,20 @@ param(
     [string]$ProfileMinCount = $env:PROFILE_MIN_COUNT,
     [string]$ProfileLegitMinCount = $env:PROFILE_LEGIT_MIN_COUNT,
     [string]$ProfileFraudMinCount = $env:PROFILE_FRAUD_MIN_COUNT,
+    [string]$ProfileFraudAmountMin = $env:PROFILE_FRAUD_AMOUNT_MIN,
+    [string]$ProfileFraudLowAmountFastPath = $env:PROFILE_FRAUD_LOW_AMOUNT_FASTPATH,
+    [string]$ProfileFraudLowAmountKmHomeMin = $env:PROFILE_FRAUD_LOW_AMOUNT_KM_HOME_MIN,
+    [string]$ProfileFraudLowAmountTx24hMin = $env:PROFILE_FRAUD_LOW_AMOUNT_TX24H_MIN,
+    [string]$ProfileFraudMidAmountNoLastFastPath = $env:PROFILE_FRAUD_MID_AMOUNT_NO_LAST_FASTPATH,
+    [string]$ProfileFraudMidAmountMin = $env:PROFILE_FRAUD_MID_AMOUNT_MIN,
+    [string]$ProfileFraudNoLastOnly = $env:PROFILE_FRAUD_NO_LAST_ONLY,
     [string]$ProfileDominantFastPath = $env:PROFILE_DOMINANT_FASTPATH,
     [string]$ProfileDominantMinCount = $env:PROFILE_DOMINANT_MIN_COUNT,
     [string]$ProfileDominantMaxOpposite = $env:PROFILE_DOMINANT_MAX_OPPOSITE,
+    [string]$BucketFastPath = $env:BUCKET_FASTPATH,
+    [string]$BucketLegitMinCount = $env:BUCKET_LEGIT_MIN_COUNT,
+    [string]$BucketFraudMinCount = $env:BUCKET_FRAUD_MIN_COUNT,
+    [string]$BucketFraudNoLastOnly = $env:BUCKET_FRAUD_NO_LAST_ONLY,
     [string]$ExactFallback = $env:EXACT_FALLBACK,
     [string]$EarlyEdgeFallback = $env:EARLY_EDGE_FALLBACK,
     [string]$RiskyAmountMin = $env:RISKY_AMOUNT_MIN,
@@ -39,6 +50,10 @@ param(
     [string]$SocketsMount = $env:SOCKETS_MOUNT,
     [string]$Workers = $env:WORKERS,
     [string]$FdRaw = $env:FD_RAW,
+    [string]$FdPreRead = $env:FD_PRE_READ,
+    [string]$AssumeBodyComplete = $env:ASSUME_BODY_COMPLETE,
+    [string]$AssumeFraudScorePath = $env:ASSUME_FRAUD_SCORE_PATH,
+    [string]$AssumeJsonBodyStart = $env:ASSUME_JSON_BODY_START,
     [string]$ServerMode = $env:SERVER_MODE,
     [string]$IndexHugePages = $env:INDEX_HUGEPAGES,
     [string]$DotnetProcessorCount = $env:DOTNET_PROCESSOR_COUNT,
@@ -47,6 +62,7 @@ param(
     [string]$DotnetGCConserveMemory = $env:DOTNET_GCConserveMemory,
     [string]$DotnetEnableDiagnostics = $env:DOTNET_EnableDiagnostics,
     [string]$GcLatencyMode = $env:GC_LATENCY_MODE,
+    [string]$ThreadPoolPrewarm = $env:TP_PREWARM,
     [string]$ThreadPoolMinThreads = $env:TP_MIN_THREADS,
     [string]$ThreadPoolMinIoThreads = $env:TP_MIN_IO_THREADS,
     [string]$ThreadPoolMaxThreads = $env:TP_MAX_THREADS,
@@ -135,9 +151,20 @@ $apiOverrides = [ordered]@{
     "PROFILE_MIN_COUNT" = $ProfileMinCount
     "PROFILE_LEGIT_MIN_COUNT" = $ProfileLegitMinCount
     "PROFILE_FRAUD_MIN_COUNT" = $ProfileFraudMinCount
+    "PROFILE_FRAUD_AMOUNT_MIN" = $ProfileFraudAmountMin
+    "PROFILE_FRAUD_LOW_AMOUNT_FASTPATH" = $ProfileFraudLowAmountFastPath
+    "PROFILE_FRAUD_LOW_AMOUNT_KM_HOME_MIN" = $ProfileFraudLowAmountKmHomeMin
+    "PROFILE_FRAUD_LOW_AMOUNT_TX24H_MIN" = $ProfileFraudLowAmountTx24hMin
+    "PROFILE_FRAUD_MID_AMOUNT_NO_LAST_FASTPATH" = $ProfileFraudMidAmountNoLastFastPath
+    "PROFILE_FRAUD_MID_AMOUNT_MIN" = $ProfileFraudMidAmountMin
+    "PROFILE_FRAUD_NO_LAST_ONLY" = $ProfileFraudNoLastOnly
     "PROFILE_DOMINANT_FASTPATH" = $ProfileDominantFastPath
     "PROFILE_DOMINANT_MIN_COUNT" = $ProfileDominantMinCount
     "PROFILE_DOMINANT_MAX_OPPOSITE" = $ProfileDominantMaxOpposite
+    "BUCKET_FASTPATH" = $BucketFastPath
+    "BUCKET_LEGIT_MIN_COUNT" = $BucketLegitMinCount
+    "BUCKET_FRAUD_MIN_COUNT" = $BucketFraudMinCount
+    "BUCKET_FRAUD_NO_LAST_ONLY" = $BucketFraudNoLastOnly
     "EXACT_FALLBACK" = $ExactFallback
     "EARLY_EDGE_FALLBACK" = $EarlyEdgeFallback
     "RISKY_AMOUNT_MIN" = $RiskyAmountMin
@@ -161,6 +188,10 @@ $apiOverrides = [ordered]@{
     "BLOCK_SCAN" = $BlockScan
     "WORKERS" = $Workers
     "FD_RAW" = $FdRaw
+    "FD_PRE_READ" = $FdPreRead
+    "ASSUME_BODY_COMPLETE" = $AssumeBodyComplete
+    "ASSUME_FRAUD_SCORE_PATH" = $AssumeFraudScorePath
+    "ASSUME_JSON_BODY_START" = $AssumeJsonBodyStart
     "SERVER_MODE" = $ServerMode
     "INDEX_HUGEPAGES" = $IndexHugePages
     "DOTNET_PROCESSOR_COUNT" = $DotnetProcessorCount
@@ -169,6 +200,7 @@ $apiOverrides = [ordered]@{
     "DOTNET_GCConserveMemory" = $DotnetGCConserveMemory
     "DOTNET_EnableDiagnostics" = $DotnetEnableDiagnostics
     "GC_LATENCY_MODE" = $GcLatencyMode
+    "TP_PREWARM" = $ThreadPoolPrewarm
     "TP_MIN_THREADS" = $ThreadPoolMinThreads
     "TP_MIN_IO_THREADS" = $ThreadPoolMinIoThreads
     "TP_MAX_THREADS" = $ThreadPoolMaxThreads
@@ -206,13 +238,21 @@ $hasCpusetOverrides =
 $hasLbEnvironmentOverrides =
     -not [string]::IsNullOrWhiteSpace($TcpDeferAccept)
 
-if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides -or $hasCpusetOverrides -or $hasLbEnvironmentOverrides) {
+$hasSocketMountOverride =
+    -not [string]::IsNullOrWhiteSpace($SocketsMount)
+
+if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides -or $hasCpusetOverrides -or $hasLbEnvironmentOverrides -or $hasSocketMountOverride) {
     $overrideFile = Join-Path ([System.IO.Path]::GetTempPath()) "$ProjectName.override.yml"
     $lines = @("services:")
-    if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory) -or -not [string]::IsNullOrWhiteSpace($LbCpuset) -or $hasLbEnvironmentOverrides) {
+    if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory) -or -not [string]::IsNullOrWhiteSpace($LbCpuset) -or $hasLbEnvironmentOverrides -or $hasSocketMountOverride) {
         $lines += "  lb:"
         if (-not [string]::IsNullOrWhiteSpace($LbCpuset)) {
             $lines += "    cpuset: `"$LbCpuset`""
+        }
+
+        if ($hasSocketMountOverride) {
+            $lines += "    volumes:"
+            $lines += "      - ${SocketsMount}"
         }
 
         if ($hasLbEnvironmentOverrides) {
@@ -220,6 +260,7 @@ if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides -or $hasCpusetOver
             if (-not [string]::IsNullOrWhiteSpace($TcpDeferAccept)) {
                 $lines += "      TCP_DEFER_ACCEPT: `"$TcpDeferAccept`""
             }
+
         }
 
         if (-not [string]::IsNullOrWhiteSpace($LbCpu) -or -not [string]::IsNullOrWhiteSpace($LbMemory)) {
@@ -236,14 +277,6 @@ if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides -or $hasCpusetOver
         }
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($SocketsMount)) {
-        foreach ($service in @("lb", "api1", "api2")) {
-            $lines += "  ${service}:"
-            $lines += "    volumes:"
-            $lines += "      - ${SocketsMount}"
-        }
-    }
-
     foreach ($service in @("api1", "api2")) {
         $serviceCpuset = $ApiCpuset
         if ($service -eq "api1" -and -not [string]::IsNullOrWhiteSpace($Api1Cpuset)) {
@@ -257,6 +290,11 @@ if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides -or $hasCpusetOver
         $lines += "  ${service}:"
         if (-not [string]::IsNullOrWhiteSpace($serviceCpuset)) {
             $lines += "    cpuset: `"$serviceCpuset`""
+        }
+
+        if ($hasSocketMountOverride) {
+            $lines += "    volumes:"
+            $lines += "      - ${SocketsMount}"
         }
 
         $lines += "    environment:"

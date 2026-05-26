@@ -32,6 +32,15 @@ internal static class HttpServer
     private static ReadOnlySpan<byte> Denied06Response => Denied06ResponseBytes;
     private static ReadOnlySpan<byte> Denied08Response => Denied08ResponseBytes;
     private static ReadOnlySpan<byte> Denied10Response => Denied10ResponseBytes;
+    private static readonly bool AssumeJsonBodyStart = EnvBool("ASSUME_JSON_BODY_START", false);
+    private static readonly bool AssumeBodyComplete = EnvBool("ASSUME_BODY_COMPLETE", false);
+    private static readonly bool AssumeFraudScorePath = EnvBool("ASSUME_FRAUD_SCORE_PATH", false);
+    private static readonly bool FdControlPrebuffer = EnvBool("FD_CONTROL_PREBUFFER", false);
+    private static readonly bool FdDedicatedThreads = EnvBool("FD_DEDICATED_THREADS", false);
+    private static readonly bool FdEpoll = EnvBool("FD_EPOLL", false);
+    private static readonly bool FdPreRead = EnvBool("FD_PRE_READ", false);
+    private static readonly bool TcpQuickAck = EnvBool("TCP_QUICKACK", false);
+    private static readonly bool ThreadPoolPreferLocal = EnvBool("TP_PREFER_LOCAL", false);
 
     public static void Serve()
     {
@@ -60,7 +69,8 @@ internal static class HttpServer
             Console.Error.WriteLine($"prefetched index pages, checksum={checksum}");
         }
 
-        ApplyThreadPoolTuning(minThreads, minIoThreads, maxThreads, maxIoThreads);
+        var configuredMinThreads = ApplyThreadPoolTuning(minThreads, minIoThreads, maxThreads, maxIoThreads);
+        PrewarmThreadPool(configuredMinThreads);
 
         var asyncMode = string.Equals(Environment.GetEnvironmentVariable("SERVER_MODE"), "raw-async", StringComparison.OrdinalIgnoreCase);
         if (bindAddress.StartsWith("fd:", StringComparison.Ordinal))
@@ -107,11 +117,12 @@ internal static class HttpServer
         }
     }
 
-    private static void ApplyThreadPoolTuning(int minThreads, int minIoThreads, int maxThreads, int maxIoThreads)
+    private static int ApplyThreadPoolTuning(int minThreads, int minIoThreads, int maxThreads, int maxIoThreads)
     {
         if (minThreads <= 0 && minIoThreads <= 0 && maxThreads <= 0 && maxIoThreads <= 0)
         {
-            return;
+            ThreadPool.GetMinThreads(out var defaultMinWorker, out _);
+            return defaultMinWorker;
         }
 
         ThreadPool.GetMinThreads(out var currentMinWorker, out var currentMinIo);
@@ -133,6 +144,37 @@ internal static class HttpServer
         }
 
         Console.Error.WriteLine($"threadpool min={targetMinWorker}/{targetMinIo}, max={targetMaxWorker}/{targetMaxIo}");
+        return targetMinWorker;
+    }
+
+    private static void PrewarmThreadPool(int minThreads)
+    {
+        var target = EnvInt("TP_PREWARM", 0);
+        if (target <= 0)
+        {
+            return;
+        }
+
+        target = Math.Min(target, Math.Max(1, minThreads));
+        using var started = new CountdownEvent(target);
+        using var release = new ManualResetEventSlim(false);
+
+        for (var i = 0; i < target; i++)
+        {
+            ThreadPool.UnsafeQueueUserWorkItem(
+                static state =>
+                {
+                    var tuple = ((CountdownEvent Started, ManualResetEventSlim Release))state!;
+                    tuple.Started.Signal();
+                    tuple.Release.Wait();
+                },
+                (started, release),
+                preferLocal: false);
+        }
+
+        _ = started.Wait(TimeSpan.FromMilliseconds(750));
+        release.Set();
+        Console.Error.WriteLine($"threadpool prewarm requested={target}, started={target - started.CurrentCount}");
     }
 
     private static async Task AcceptLoopAsync(Socket listener, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs)
@@ -271,11 +313,27 @@ internal static class HttpServer
         int keepAliveRequests,
         int keepAliveIdleMs)
     {
-        using var listener = CreateUnixListener(controlPath);
         var receiverCount = Math.Max(1, EnvInt("FD_RECEIVERS", workerCount));
         var rawFd = EnvBool("FD_RAW", false);
         Console.Error.WriteLine(
-            $"serving fd control on {controlPath}, receivers={receiverCount}, raw_fd={rawFd}, index={Environment.GetEnvironmentVariable("INDEX_PATH")}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, risky_fallback_refs={index.RiskyFallbackCount}");
+            $"serving fd control on {controlPath}, receivers={receiverCount}, raw_fd={rawFd}, fd_epoll={FdEpoll}, fd_dedicated_threads={FdDedicatedThreads}, index={Environment.GetEnvironmentVariable("INDEX_PATH")}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, risky_fallback_refs={index.RiskyFallbackCount}");
+
+        using var listener = CreateUnixListener(controlPath);
+        if (rawFd && FdEpoll)
+        {
+            for (var i = 0; i < receiverCount; i++)
+            {
+                var thread = new Thread(() => RunFdEpollLoop(listener, index, searchParams, keepAliveRequests))
+                {
+                    IsBackground = false,
+                    Name = $"rinha-fd-epoll-{i}"
+                };
+                thread.Start();
+            }
+
+            Thread.Sleep(Timeout.Infinite);
+            return;
+        }
 
         for (var i = 0; i < receiverCount; i++)
         {
@@ -329,22 +387,58 @@ internal static class HttpServer
         using var acceptedControl = control;
         while (true)
         {
-            var fd = ReceiveSocketFd(acceptedControl);
+            var initialBuffer = rawFd && FdControlPrebuffer
+                ? ArrayPool<byte>.Shared.Rent(Constants.MaxRequestBytes)
+                : null;
+            var fd = ReceiveSocketFd(acceptedControl, initialBuffer, out var initialLength);
             if (fd < 0)
             {
+                if (initialBuffer is not null)
+                {
+                    ArrayPool<byte>.Shared.Return(initialBuffer);
+                }
+
                 return;
             }
 
             if (rawFd)
             {
-                ThreadPool.UnsafeQueueUserWorkItem(
-                    static (FdConnectionWork work) =>
+                if (initialBuffer is null && FdPreRead)
+                {
+                    initialBuffer = ArrayPool<byte>.Shared.Rent(Constants.MaxRequestBytes);
+                    var read = ReceiveDontWait(fd, initialBuffer, out var wouldBlock);
+                    if (read > 0)
                     {
-                        HandleConnection(work.Fd, work.Index, work.SearchParams, work.KeepAliveRequests);
-                    },
-                    new FdConnectionWork(fd, index, searchParams, keepAliveRequests),
-                    preferLocal: false);
+                        initialLength = read;
+                    }
+                    else if (read == 0 || !wouldBlock)
+                    {
+                        ArrayPool<byte>.Shared.Return(initialBuffer);
+                        CloseFd(fd);
+                        continue;
+                    }
+                }
+
+                if (FdDedicatedThreads)
+                {
+                    var thread = new Thread(
+                        RunFdDedicatedConnection,
+                        Math.Max(64 * 1024, EnvInt("FD_THREAD_STACK_KB", 128) * 1024))
+                    {
+                        IsBackground = true,
+                        Name = "rinha-fd-client"
+                    };
+                    thread.Start(new FdConnectionWork(fd, index, searchParams, keepAliveRequests, initialBuffer, initialLength));
+                    continue;
+                }
+
+                QueueFdToThreadPool(new FdConnectionWork(fd, index, searchParams, keepAliveRequests, initialBuffer, initialLength));
                 continue;
+            }
+
+            if (initialBuffer is not null)
+            {
+                ArrayPool<byte>.Shared.Return(initialBuffer);
             }
 
             Socket? socket = null;
@@ -400,7 +494,7 @@ internal static class HttpServer
             {
                 int headerEnd;
                 int contentLength;
-                while (!RequestComplete(buffer.AsSpan(0, used), out headerEnd, out contentLength))
+                while (!RequestComplete(buffer[..used], out headerEnd, out contentLength))
                 {
                     if (used >= buffer.Length)
                     {
@@ -442,12 +536,17 @@ internal static class HttpServer
         }
     }
 
-    private static void HandleConnection(int fd, BinaryIndex index, SearchParams searchParams, int keepAliveRequests)
+    private static void HandleConnection(int fd, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, byte[]? initialBuffer = null, int initialLength = 0)
     {
-        var buffer = ArrayPool<byte>.Shared.Rent(Constants.MaxRequestBytes);
+        if (TcpQuickAck)
+        {
+            TrySetTcpQuickAck(fd);
+        }
+
+        var buffer = initialBuffer ?? ArrayPool<byte>.Shared.Rent(Constants.MaxRequestBytes);
         try
         {
-            var used = 0;
+            var used = Math.Clamp(initialLength, 0, buffer.Length);
             var handled = 0;
             while (true)
             {
@@ -487,6 +586,316 @@ internal static class HttpServer
         }
     }
 
+    private static unsafe void RunFdEpollLoop(Socket listener, BinaryIndex index, SearchParams searchParams, int keepAliveRequests)
+    {
+        var listenerFd = (int)listener.SafeHandle.DangerousGetHandle();
+        SetNonBlocking(listenerFd);
+
+        var epollFd = epoll_create1(EpollCloexec);
+        if (epollFd < 0)
+        {
+            Console.Error.WriteLine($"epoll_create1 failed errno={Marshal.GetLastPInvokeError()}");
+            return;
+        }
+
+        var listenerState = new FdEpollState(FdEpollStateKind.Listener, listenerFd, null);
+        listenerState.Handle = GCHandle.Alloc(listenerState);
+        if (EpollAdd(epollFd, listenerState) < 0)
+        {
+            Console.Error.WriteLine($"epoll add listener failed errno={Marshal.GetLastPInvokeError()}");
+            listenerState.Handle.Free();
+            CloseFd(epollFd);
+            return;
+        }
+
+        Span<EpollEvent> events = stackalloc EpollEvent[128];
+        fixed (EpollEvent* eventsPtr = events)
+        {
+            while (true)
+            {
+                var ready = epoll_wait(epollFd, eventsPtr, events.Length, -1);
+                if (ready < 0)
+                {
+                    if (Marshal.GetLastPInvokeError() == Eintr)
+                    {
+                        continue;
+                    }
+
+                    Console.Error.WriteLine($"epoll_wait failed errno={Marshal.GetLastPInvokeError()}");
+                    break;
+                }
+
+                for (var i = 0; i < ready; i++)
+                {
+                    var handle = GCHandle.FromIntPtr(events[i].Data);
+                    if (handle.Target is not FdEpollState state)
+                    {
+                        continue;
+                    }
+
+                    if (state.Kind == FdEpollStateKind.Listener)
+                    {
+                        AcceptFdEpollControls(epollFd, listenerFd);
+                    }
+                    else if (state.Kind == FdEpollStateKind.Control)
+                    {
+                        if ((events[i].Events & (EpollErr | EpollHup | EpollRdHup)) != 0)
+                        {
+                            CloseFdEpollState(epollFd, state);
+                        }
+                        else
+                        {
+                            ReceiveFdEpollClients(epollFd, state, index, searchParams, keepAliveRequests, FdControlPrebuffer);
+                        }
+                    }
+                    else if ((events[i].Events & (EpollErr | EpollHup)) != 0)
+                    {
+                        CloseFdEpollState(epollFd, state);
+                    }
+                    else
+                    {
+                        HandleFdEpollClient(epollFd, state, index, searchParams, keepAliveRequests);
+                    }
+                }
+            }
+        }
+
+        CloseFd(epollFd);
+    }
+
+    private static void RunFdDedicatedConnection(object? state)
+    {
+        if (state is not FdConnectionWork work)
+        {
+            return;
+        }
+
+        try
+        {
+            HandleConnection(work.Fd, work.Index, work.SearchParams, work.KeepAliveRequests, work.InitialBuffer, work.InitialLength);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void QueueFdToThreadPool(FdConnectionWork work)
+    {
+        ThreadPool.UnsafeQueueUserWorkItem(
+            static (FdConnectionWork queued) =>
+            {
+                HandleConnection(queued.Fd, queued.Index, queued.SearchParams, queued.KeepAliveRequests, queued.InitialBuffer, queued.InitialLength);
+            },
+            work,
+            preferLocal: ThreadPoolPreferLocal);
+    }
+
+    private static void AcceptFdEpollControls(int epollFd, int listenerFd)
+    {
+        while (true)
+        {
+            var controlFd = accept4(listenerFd, 0, 0, SockCloexec);
+            if (controlFd < 0)
+            {
+                var error = Marshal.GetLastPInvokeError();
+                if (error == Eintr)
+                {
+                    continue;
+                }
+
+                return;
+            }
+
+            var state = new FdEpollState(FdEpollStateKind.Control, controlFd, null);
+            state.Handle = GCHandle.Alloc(state);
+            if (EpollAdd(epollFd, state) < 0)
+            {
+                CloseFd(controlFd);
+                state.Handle.Free();
+            }
+        }
+    }
+
+    private static void ReceiveFdEpollClients(
+        int epollFd,
+        FdEpollState controlState,
+        BinaryIndex index,
+        SearchParams searchParams,
+        int keepAliveRequests,
+        bool prebuffer)
+    {
+        while (true)
+        {
+            var initialBuffer = prebuffer
+                ? ArrayPool<byte>.Shared.Rent(Constants.MaxRequestBytes)
+                : null;
+            var clientFd = ReceiveSocketFdRaw(
+                controlState.Fd,
+                initialBuffer,
+                out var initialLength,
+                MsgDontWait,
+                out var wouldBlock);
+            if (clientFd < 0)
+            {
+                if (initialBuffer is not null)
+                {
+                    ArrayPool<byte>.Shared.Return(initialBuffer);
+                }
+
+                if (wouldBlock)
+                {
+                    return;
+                }
+
+                CloseFdEpollState(epollFd, controlState);
+                return;
+            }
+
+            var buffer = initialBuffer ?? ArrayPool<byte>.Shared.Rent(Constants.MaxRequestBytes);
+            var state = new FdEpollState(FdEpollStateKind.Client, clientFd, buffer)
+            {
+                Used = Math.Clamp(initialLength, 0, buffer.Length)
+            };
+            state.Handle = GCHandle.Alloc(state);
+            if (TcpQuickAck)
+            {
+                TrySetTcpQuickAck(clientFd);
+            }
+
+            if (EpollAdd(epollFd, state) < 0)
+            {
+                CloseFd(clientFd);
+                ArrayPool<byte>.Shared.Return(buffer);
+                state.Handle.Free();
+                continue;
+            }
+
+            if (state.Used > 0)
+            {
+                if (TcpQuickAck)
+                {
+                    TrySetTcpQuickAck(clientFd);
+                }
+
+                HandleFdEpollClient(epollFd, state, index, searchParams, keepAliveRequests);
+            }
+        }
+    }
+
+    private static void HandleFdEpollClient(
+        int epollFd,
+        FdEpollState state,
+        BinaryIndex? index,
+        SearchParams searchParams,
+        int keepAliveRequests)
+    {
+        var buffer = state.Buffer;
+        if (buffer is null || index is null)
+        {
+            CloseFdEpollState(epollFd, state);
+            return;
+        }
+
+        while (true)
+        {
+            if (RequestComplete(buffer.AsSpan(0, state.Used), out var headerEnd, out var contentLength))
+            {
+                Send(state.Fd, SelectResponse(buffer, state.Used, headerEnd, contentLength, index, searchParams).Span);
+                state.Handled++;
+                if (keepAliveRequests > 0 && state.Handled >= keepAliveRequests)
+                {
+                    CloseFdEpollState(epollFd, state);
+                    return;
+                }
+
+                state.Used = 0;
+                continue;
+            }
+
+            if (state.Used >= buffer.Length)
+            {
+                Send(state.Fd, DefaultResponse);
+                CloseFdEpollState(epollFd, state);
+                return;
+            }
+
+            var read = ReceiveDontWait(state.Fd, buffer.AsSpan(state.Used, buffer.Length - state.Used), out var wouldBlock);
+            if (read > 0)
+            {
+                state.Used += read;
+                continue;
+            }
+
+            if (wouldBlock)
+            {
+                return;
+            }
+
+            CloseFdEpollState(epollFd, state);
+            return;
+        }
+    }
+
+    private static int EpollAdd(int epollFd, FdEpollState state)
+    {
+        var ev = new EpollEvent
+        {
+            Events = EpollIn | EpollErr | EpollHup | EpollRdHup,
+            Data = GCHandle.ToIntPtr(state.Handle)
+        };
+        return epoll_ctl(epollFd, EpollCtlAdd, state.Fd, ref ev);
+    }
+
+    private static void CloseFdEpollState(int epollFd, FdEpollState state)
+    {
+        if (state.Kind != FdEpollStateKind.Listener)
+        {
+            var ev = default(EpollEvent);
+            _ = epoll_ctl(epollFd, EpollCtlDel, state.Fd, ref ev);
+            CloseFd(state.Fd);
+        }
+
+        if (state.Buffer is not null)
+        {
+            ArrayPool<byte>.Shared.Return(state.Buffer);
+            state.Buffer = null;
+        }
+
+        if (state.Handle.IsAllocated)
+        {
+            state.Handle.Free();
+        }
+    }
+
+    private sealed class FdEpollState
+    {
+        public FdEpollState(FdEpollStateKind kind, int fd, byte[]? buffer)
+        {
+            Kind = kind;
+            Fd = fd;
+            Buffer = buffer;
+        }
+
+        public FdEpollStateKind Kind { get; }
+
+        public int Fd { get; }
+
+        public byte[]? Buffer { get; set; }
+
+        public int Used { get; set; }
+
+        public int Handled { get; set; }
+
+        public GCHandle Handle { get; set; }
+    }
+
+    private enum FdEpollStateKind
+    {
+        Listener,
+        Control,
+        Client
+    }
+
     private readonly struct ConnectionWork
     {
         public ConnectionWork(Socket socket, BinaryIndex index, SearchParams searchParams, int keepAliveRequests)
@@ -508,12 +917,14 @@ internal static class HttpServer
 
     private readonly struct FdConnectionWork
     {
-        public FdConnectionWork(int fd, BinaryIndex index, SearchParams searchParams, int keepAliveRequests)
+        public FdConnectionWork(int fd, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, byte[]? initialBuffer, int initialLength)
         {
             Fd = fd;
             Index = index;
             SearchParams = searchParams;
             KeepAliveRequests = keepAliveRequests;
+            InitialBuffer = initialBuffer;
+            InitialLength = initialLength;
         }
 
         public int Fd { get; }
@@ -523,6 +934,10 @@ internal static class HttpServer
         public SearchParams SearchParams { get; }
 
         public int KeepAliveRequests { get; }
+
+        public byte[]? InitialBuffer { get; }
+
+        public int InitialLength { get; }
     }
 
     private static void HandleRequest(
@@ -549,6 +964,12 @@ internal static class HttpServer
         {
             var bodyStart = headerEnd + 4;
             var body = request.Slice(bodyStart, contentLength);
+            if (index.TryClassifyFraudCountJson(body, searchParams, out var nativeFraudCount))
+            {
+                SendDecision(socket, nativeFraudCount);
+                return;
+            }
+
             Span<short> query = stackalloc short[Constants.PaddedDim];
             if (!QueryBuilder.TryBuildQuery(body, query))
             {
@@ -565,13 +986,37 @@ internal static class HttpServer
         }
     }
 
+
     private static bool RequestComplete(ReadOnlySpan<byte> bytes, out int headerEnd, out int contentLength)
     {
+        if (AssumeJsonBodyStart &&
+            bytes.Length >= 18 &&
+            bytes.StartsWith("POST /fraud-score"u8) &&
+            (bytes[17] is (byte)' ' or (byte)'?'))
+        {
+            var bodyStart = bytes.IndexOf((byte)'{');
+            if (bodyStart >= 0)
+            {
+                headerEnd = bodyStart - 4;
+                contentLength = bytes.Length - bodyStart;
+                return headerEnd >= 0;
+            }
+        }
+
         headerEnd = IndexOf(bytes, "\r\n\r\n"u8);
         contentLength = 0;
         if (headerEnd < 0)
         {
             return false;
+        }
+
+        if (AssumeBodyComplete &&
+            bytes.StartsWith("POST /fraud-score"u8) &&
+            bytes.Length >= 18 &&
+            bytes[17] is (byte)' ' or (byte)'?')
+        {
+            contentLength = bytes.Length - headerEnd - 4;
+            return contentLength >= 0;
         }
 
         contentLength = ContentLength(bytes[..(headerEnd + 4)]);
@@ -704,7 +1149,9 @@ internal static class HttpServer
         SearchParams searchParams)
     {
         var request = buffer.AsSpan(0, used);
-        if (!request.StartsWith("POST /fraud-score "u8) && !request.StartsWith("POST /fraud-score?"u8))
+        if (!AssumeFraudScorePath &&
+            !request.StartsWith("POST /fraud-score "u8) &&
+            !request.StartsWith("POST /fraud-score?"u8))
         {
             if (request.StartsWith("GET /ready "u8) || request.StartsWith("GET /ready?"u8))
             {
@@ -718,6 +1165,19 @@ internal static class HttpServer
         {
             var bodyStart = headerEnd + 4;
             var body = request.Slice(bodyStart, contentLength);
+            if (index.TryClassifyFraudCountJson(body, searchParams, out var nativeFraudCount))
+            {
+                return nativeFraudCount switch
+                {
+                    <= 0 => Approved00ResponseBytes,
+                    1 => Approved02ResponseBytes,
+                    2 => Approved04ResponseBytes,
+                    3 => Denied06ResponseBytes,
+                    4 => Denied08ResponseBytes,
+                    _ => Denied10ResponseBytes
+                };
+            }
+
             Span<short> query = stackalloc short[Constants.PaddedDim];
             if (!QueryBuilder.TryBuildQuery(body, query))
             {
@@ -783,6 +1243,35 @@ internal static class HttpServer
                 if (Marshal.GetLastPInvokeError() == Eintr)
                 {
                     continue;
+                }
+
+                return -1;
+            }
+        }
+    }
+
+    private static unsafe int ReceiveDontWait(int fd, Span<byte> buffer, out bool wouldBlock)
+    {
+        wouldBlock = false;
+        fixed (byte* ptr = buffer)
+        {
+            while (true)
+            {
+                var received = recv(fd, ptr, (nuint)buffer.Length, MsgDontWait);
+                if (received >= 0)
+                {
+                    return (int)received;
+                }
+
+                var error = Marshal.GetLastPInvokeError();
+                if (error == Eintr)
+                {
+                    continue;
+                }
+
+                if (error == Eagain)
+                {
+                    wouldBlock = true;
                 }
 
                 return -1;
@@ -865,7 +1354,8 @@ internal static class HttpServer
     private static Socket CreateUnixListener(string path)
     {
         TryDeleteUnixSocket(path);
-        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        var socketType = EnvBool("FD_CONTROL_SEQPACKET", false) ? SocketType.Seqpacket : SocketType.Stream;
+        var listener = new Socket(AddressFamily.Unix, socketType, ProtocolType.Unspecified);
         listener.Bind(new UnixDomainSocketEndPoint(path));
         TrySetUnixSocketPermissions(path);
         listener.Listen(4096);
@@ -931,18 +1421,31 @@ internal static class HttpServer
         return new IPEndPoint(address, port);
     }
 
-    private static unsafe int ReceiveSocketFd(Socket control)
+    private static unsafe int ReceiveSocketFd(Socket control, byte[]? initialBuffer, out int initialLength)
     {
         var sockfd = (int)control.SafeHandle.DangerousGetHandle();
+        return ReceiveSocketFdRaw(sockfd, initialBuffer, out initialLength, 0, out _);
+    }
+
+    private static unsafe int ReceiveSocketFdRaw(
+        int sockfd,
+        byte[]? initialBuffer,
+        out int initialLength,
+        int flags,
+        out bool wouldBlock)
+    {
+        initialLength = 0;
+        wouldBlock = false;
         byte data = 0;
         Span<byte> controlBuffer = stackalloc byte[24];
 
         fixed (byte* controlPtr = controlBuffer)
+        fixed (byte* initialPtr = initialBuffer)
         {
             var iov = new IOVec
             {
-                Base = &data,
-                Len = 1
+                Base = initialBuffer is null ? &data : initialPtr,
+                Len = initialBuffer is null ? 1 : (nuint)initialBuffer.Length
             };
             var msg = new MsgHdr
             {
@@ -952,9 +1455,23 @@ internal static class HttpServer
                 ControlLen = (nuint)controlBuffer.Length
             };
 
-            var received = recvmsg(sockfd, &msg, 0);
+            nint received;
+            while (true)
+            {
+                received = recvmsg(sockfd, &msg, flags);
+                if (received >= 0 || Marshal.GetLastPInvokeError() != Eintr)
+                {
+                    break;
+                }
+            }
+
             if (received <= 0)
             {
+                if (received < 0 && Marshal.GetLastPInvokeError() == Eagain)
+                {
+                    wouldBlock = true;
+                }
+
                 return -1;
             }
 
@@ -971,6 +1488,11 @@ internal static class HttpServer
                 return -1;
             }
 
+            if (initialBuffer is not null && !(received == 1 && initialBuffer[0] == 0))
+            {
+                initialLength = Math.Min((int)received, initialBuffer.Length);
+            }
+
             return Unsafe.ReadUnaligned<int>(controlPtr + 16);
         }
     }
@@ -983,10 +1505,38 @@ internal static class HttpServer
         }
     }
 
+    private static void TrySetTcpQuickAck(int fd)
+    {
+        var value = 1;
+        _ = setsockopt(fd, IpProtoTcp, TcpQuickAckOption, ref value, sizeof(int));
+    }
+
     private const int SolSocket = 1;
     private const int ScmRights = 1;
     private const int Eintr = 4;
+    private const int Eagain = 11;
+    private const int FGetFl = 3;
+    private const int FSetFl = 4;
+    private const int IpProtoTcp = 6;
+    private const int TcpQuickAckOption = 12;
+    private const int ONonBlock = 0x800;
+    private const int SockCloexec = 0x80000;
+    private const int EpollCloexec = 0x80000;
+    private const int EpollCtlAdd = 1;
+    private const int EpollCtlDel = 2;
+    private const uint EpollIn = 0x001;
+    private const uint EpollErr = 0x008;
+    private const uint EpollHup = 0x010;
+    private const uint EpollRdHup = 0x2000;
+    private const int MsgDontWait = 0x40;
     private const int MsgNoSignal = 0x4000;
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct EpollEvent
+    {
+        public uint Events;
+        public nint Data;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private unsafe struct IOVec
@@ -1019,6 +1569,33 @@ internal static class HttpServer
     [DllImport("libc", SetLastError = true)]
     private static extern int close(int fd);
 
+    [DllImport("libc", SetLastError = true)]
+    private static extern int setsockopt(int socket, int level, int optionName, ref int optionValue, int optionLength);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int accept4(int sockfd, nint addr, nint addrlen, int flags);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int epoll_create1(int flags);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int epoll_ctl(int epfd, int op, int fd, ref EpollEvent ev);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern unsafe int epoll_wait(int epfd, EpollEvent* events, int maxevents, int timeout);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int fcntl(int fd, int cmd, int arg);
+
+    private static void SetNonBlocking(int fd)
+    {
+        var flags = fcntl(fd, FGetFl, 0);
+        if (flags >= 0)
+        {
+            _ = fcntl(fd, FSetFl, flags | ONonBlock);
+        }
+    }
+
     private static bool EnvBool(string name, bool fallback)
     {
         var value = Environment.GetEnvironmentVariable(name);
@@ -1034,6 +1611,7 @@ internal static class HttpServer
     {
         return source.IndexOf(needle);
     }
+
 
     private static bool AsciiStartsWithIgnoreCase(ReadOnlySpan<byte> source, ReadOnlySpan<byte> prefix)
     {

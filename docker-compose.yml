@@ -1,6 +1,6 @@
 services:
   lb:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:ee21b66e627cd4a346a550b320723656211423c2
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:bae2984f3b76ee45c5990b62f4ece954056b1aff
     platform: linux/amd64
     entrypoint: ["rinha-lb"]
     environment:
@@ -25,7 +25,7 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:ee21b66e627cd4a346a550b320723656211423c2
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:bae2984f3b76ee45c5990b62f4ece954056b1aff
     platform: linux/amd64
     entrypoint: ["rinha-fraud", "serve"]
     environment:
@@ -78,7 +78,7 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:ee21b66e627cd4a346a550b320723656211423c2
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:bae2984f3b76ee45c5990b62f4ece954056b1aff
     platform: linux/amd64
     entrypoint: ["rinha-fraud", "serve"]
     environment:

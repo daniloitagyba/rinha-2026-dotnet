@@ -5,14 +5,10 @@ services:
     entrypoint: ["rinha-lb"]
     environment:
       LB_MODE: fdpass
-    sysctls:
-      net.core.somaxconn: "65535"
     ports:
       - "9999:9999"
     volumes:
       - backend-sockets:/sockets
-    security_opt:
-      - seccomp=unconfined
     ulimits:
       nofile:
         soft: 65535
@@ -75,8 +71,6 @@ services:
       DOTNET_EnableDiagnostics: "0"
     volumes:
       - backend-sockets:/sockets
-    security_opt:
-      - seccomp=unconfined
     ulimits:
       nofile:
         soft: 65535
@@ -136,8 +130,6 @@ services:
       DOTNET_EnableDiagnostics: "0"
     volumes:
       - backend-sockets:/sockets
-    security_opt:
-      - seccomp=unconfined
     ulimits:
       nofile:
         soft: 65535

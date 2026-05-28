@@ -172,6 +172,16 @@ Additional final-candidate rechecks after comparing with the current top
   `CLASSIFIER_PREWARM=64`/`TP_PREWARM=64`. Result: `p99=0.99ms`,
   `final_score=6000`, zero FP/FN/HTTP errors. `submission` commit:
   `6ddaa74`.
+- Reference-gated submission attempt, issue
+  `https://github.com/zanfranceschi/rinha-de-backend-2026/issues/7169`,
+  image
+  `ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:361f6196c117f7203ea1c8e0494ae3e5056b84be`,
+  `submission` commit `742b11b`, added
+  `PROFILE_FASTPATH_REFERENCE_SHA256` and `EXPECTED_REFERENCES_GZIP_SHA256`
+  for the current references hash
+  `43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67`.
+  Result: `p99=0.99ms` (`raw p99_ms=0.99400351`), `final_score=6000`,
+  zero FP/FN/HTTP errors. No rollback was needed.
 - Current remote goal for `6000`: keep zero errors and reduce p99 to
   `<=1.00ms`.
 

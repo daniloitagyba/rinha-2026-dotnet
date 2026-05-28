@@ -7,6 +7,8 @@ MODE="${MODE:-submission}"
 RUNNER_PRESET="${RUNNER_PRESET:-default}"
 PROJECT_NAME="${PROJECT_NAME:-rinha-local}"
 K6_IMAGE="${K6_IMAGE:-grafana/k6:latest}"
+K6_NETWORK_MODE="${K6_NETWORK_MODE:-bridge}"
+K6_BASE_URL="${K6_BASE_URL:-}"
 SUBMISSION_COMPOSE_FILE="${SUBMISSION_COMPOSE_FILE:-}"
 KEEP_SERVICES="${KEEP_SERVICES:-0}"
 REFRESH_DATA="${REFRESH_DATA:-0}"
@@ -46,6 +48,25 @@ case "$RUNNER_PRESET" in
     exit 2
     ;;
 esac
+
+case "$K6_NETWORK_MODE" in
+  bridge)
+    K6_DOCKER_NETWORK="${PROJECT_NAME}_default"
+    K6_DEFAULT_BASE_URL="http://lb:9999"
+    ;;
+  host)
+    K6_DOCKER_NETWORK="host"
+    K6_DEFAULT_BASE_URL="http://localhost:9999"
+    ;;
+  *)
+    echo "K6_NETWORK_MODE must be bridge or host" >&2
+    exit 2
+    ;;
+esac
+
+if [ -z "$K6_BASE_URL" ]; then
+  K6_BASE_URL="$K6_DEFAULT_BASE_URL"
+fi
 
 if [ "$MODE" = "submission" ]; then
   if [ -n "$SUBMISSION_COMPOSE_FILE" ]; then
@@ -375,9 +396,32 @@ if [ "$ready" != "1" ]; then
   exit 1
 fi
 
+PERF_PID=""
+if [ "${PERF_STAT:-0}" = "1" ] && command -v perf >/dev/null 2>&1; then
+  PERF_STAT_FILE="${PERF_STAT_FILE:-$ROOT/test/perf-stat.txt}"
+  PERF_SERVICE_IDS="$(compose ps -q lb api1 api2 2>/dev/null || true)"
+  PERF_PIDS=""
+  if [ -n "$PERF_SERVICE_IDS" ]; then
+    PERF_PIDS="$(docker inspect --format '{{.State.Pid}}' $PERF_SERVICE_IDS 2>/dev/null \
+      | awk '$1 > 0' \
+      | paste -sd, -)"
+  fi
+
+  if [ -n "$PERF_PIDS" ]; then
+    perf stat \
+      -e task-clock,cycles,instructions,cache-references,cache-misses,context-switches,cpu-migrations,page-faults \
+      -p "$PERF_PIDS" \
+      -- sleep "${PERF_DURATION:-150}" >"$PERF_STAT_FILE" 2>&1 &
+    PERF_PID="$!"
+  else
+    echo "PERF_STAT requested but no running service pids were found" >&2
+  fi
+fi
+
 docker run --rm \
-  --network "${PROJECT_NAME}_default" \
-  -e BASE_URL="http://lb:9999" \
+  --network "$K6_DOCKER_NETWORK" \
+  -e K6_NO_USAGE_REPORT=true \
+  -e BASE_URL="$K6_BASE_URL" \
   -e RESULTS_PATH="/scripts/results.json" \
   -e TARGET_RATE \
   -e RAMP_DURATION \
@@ -388,3 +432,7 @@ docker run --rm \
   -e DUMP_MISMATCHES \
   -v "$TEST_MOUNT:/scripts" \
   "$K6_IMAGE" run /scripts/rinha-test.js
+
+if [ -n "$PERF_PID" ]; then
+  wait "$PERF_PID" || true
+fi

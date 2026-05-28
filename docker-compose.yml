@@ -11,10 +11,12 @@ services:
         BUILD_KDTREE_INDEX: ${BUILD_KDTREE_INDEX:-1}
         KDTREE_LEAF_SIZE: ${KDTREE_LEAF_SIZE:-96}
         KDTREE_KEY_PROFILE: ${KDTREE_KEY_PROFILE:-0}
-        NATIVE_CFLAGS_EXTRA: ${NATIVE_CFLAGS_EXTRA:-}
+        NATIVE_CFLAGS_EXTRA: ${NATIVE_CFLAGS_EXTRA:--DJSON_FIXED_NUMBERS=1 -DKD_BEST_FIRST=1}
     entrypoint: ["rinha-lb"]
     environment:
       LB_MODE: fdpass
+    sysctls:
+      net.core.somaxconn: "65535"
     ports:
       - "9999:9999"
     volumes:
@@ -47,7 +49,7 @@ services:
         BUILD_KDTREE_INDEX: ${BUILD_KDTREE_INDEX:-1}
         KDTREE_LEAF_SIZE: ${KDTREE_LEAF_SIZE:-96}
         KDTREE_KEY_PROFILE: ${KDTREE_KEY_PROFILE:-0}
-        NATIVE_CFLAGS_EXTRA: ${NATIVE_CFLAGS_EXTRA:-}
+        NATIVE_CFLAGS_EXTRA: ${NATIVE_CFLAGS_EXTRA:--DJSON_FIXED_NUMBERS=1 -DKD_BEST_FIRST=1}
     environment:
       BIND_ADDR: fd:/sockets/api1.sock.ctrl
       INDEX_PATH: /app/data/references.idx
@@ -57,6 +59,7 @@ services:
       KDTREE_NATIVE: "1"
       DOTNET_EnableDiagnostics: "0"
       TP_MIN_THREADS: "64"
+      TP_MIN_IO_THREADS: "4"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
       MIN_CANDIDATES: "9800"
@@ -108,7 +111,7 @@ services:
         BUILD_KDTREE_INDEX: ${BUILD_KDTREE_INDEX:-1}
         KDTREE_LEAF_SIZE: ${KDTREE_LEAF_SIZE:-96}
         KDTREE_KEY_PROFILE: ${KDTREE_KEY_PROFILE:-0}
-        NATIVE_CFLAGS_EXTRA: ${NATIVE_CFLAGS_EXTRA:-}
+        NATIVE_CFLAGS_EXTRA: ${NATIVE_CFLAGS_EXTRA:--DJSON_FIXED_NUMBERS=1 -DKD_BEST_FIRST=1}
     environment:
       BIND_ADDR: fd:/sockets/api2.sock.ctrl
       INDEX_PATH: /app/data/references.idx
@@ -118,6 +121,7 @@ services:
       KDTREE_NATIVE: "1"
       DOTNET_EnableDiagnostics: "0"
       TP_MIN_THREADS: "64"
+      TP_MIN_IO_THREADS: "4"
       WORKERS: "2"
       EARLY_CANDIDATES: "9800"
       MIN_CANDIDATES: "9800"

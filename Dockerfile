@@ -11,7 +11,7 @@ RUN case "$TARGETARCH" in \
       *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
     esac \
     && dotnet publish src/RinhaFraud/RinhaFraud.csproj -c Release -r "$RID" -o /out/app
-ARG NATIVE_CFLAGS_EXTRA=""
+ARG NATIVE_CFLAGS_EXTRA="-DJSON_FIXED_NUMBERS=1 -DKD_BEST_FIRST=1"
 RUN mkdir -p /out/lb \
     && clang -O3 -DNDEBUG -march=haswell -mtune=haswell $NATIVE_CFLAGS_EXTRA -pthread -o /out/lb/rinha-lb src/lb/rinha-lb.c
 ARG KDTREE_KEY_PROFILE=0
@@ -48,6 +48,7 @@ ENV BIND_ADDR=0.0.0.0:8080
 ENV INDEX_PATH=/app/data/references.idx
 ENV SERVER_MODE=raw
 ENV TP_MIN_THREADS=64
+ENV TP_MIN_IO_THREADS=4
 ENV WORKERS=2
 ENV EARLY_CANDIDATES=9800
 ENV MIN_CANDIDATES=9800

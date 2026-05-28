@@ -58,6 +58,12 @@ The response must continue to include both fields:
 Removing `fraud_score`, changing response shape or using payload lookup tables
 is outside the accepted architecture.
 
+Fast paths are allowed only as accelerators over the same classifier contract.
+When enabled, `FASTPATH_CANARY_REQUESTS` / `FASTPATH_CANARY_INTERVAL` can sample
+fast-path results against `SearchParams.WithoutFastPaths()`. If a sampled
+request diverges, the API disables fast paths in that process and returns the
+safe result.
+
 ## Index And References
 
 The image embeds a binary index at `/app/data/references.idx`.
@@ -89,6 +95,7 @@ Core:
 - `FD_RAW=1`
 - `TP_MIN_THREADS=64`
 - `WORKERS=2`
+- `LB_PRECONNECT_CONTROL=1`
 
 Accuracy/default-safe:
 
@@ -105,6 +112,9 @@ Experimental/default-off:
 - `FD_PRE_READ=1`
 - `TCP_QUICKACK=1`
 - `BUCKET_FASTPATH=1`
+- `FASTPATH_CANARY_REQUESTS`
+- `FASTPATH_CANARY_INTERVAL`
+- `CLASSIFIER_PREWARM`
 - `TP_PREWARM`
 
 ## Invariants

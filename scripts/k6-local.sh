@@ -180,13 +180,16 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${NATIVE_EPOLL:-}" ] || \
    [ -n "${FD_IMMEDIATE_READ:-}" ] || \
    [ -n "${FD_PRE_READ:-}" ] || \
-   [ -n "${ASSUME_BODY_COMPLETE:-}" ] || \
-   [ -n "${ASSUME_FRAUD_SCORE_PATH:-}" ] || \
-   [ -n "${ASSUME_JSON_BODY_START:-}" ] || \
-   [ -n "${EPOLL_ET:-}" ] || \
+    [ -n "${ASSUME_BODY_COMPLETE:-}" ] || \
+    [ -n "${ASSUME_FRAUD_SCORE_PATH:-}" ] || \
+    [ -n "${ASSUME_JSON_BODY_START:-}" ] || \
+    [ -n "${FASTPATH_CANARY_REQUESTS:-}" ] || \
+    [ -n "${FASTPATH_CANARY_INTERVAL:-}" ] || \
+    [ -n "${EPOLL_ET:-}" ] || \
    [ -n "${PIN_FIRST_CPU:-}" ] || \
    [ -n "${FD_CONTROL_SEQPACKET:-}" ] || \
    [ -n "${FD_CONTROL_PREBUFFER:-}" ] || \
+   [ -n "${LB_PRECONNECT_CONTROL:-}" ] || \
    [ -n "${LB_SOCKET_BUFFERS:-}" ] || \
    [ -n "${LB_TCP_NODELAY:-}" ] || \
    [ -n "${SOCKET_BUFFER_SIZE:-}" ] || \
@@ -201,6 +204,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${DOTNET_GCConserveMemory:-}" ] || \
    [ -n "${DOTNET_EnableDiagnostics:-}" ] || \
    [ -n "${GC_LATENCY_MODE:-}" ] || \
+   [ -n "${CLASSIFIER_PREWARM:-}" ] || \
    [ -n "${TP_PREWARM:-}" ] || \
    [ -n "${TP_PREFER_LOCAL:-}" ] || \
    [ -n "${TP_MIN_THREADS:-}" ] || \
@@ -238,6 +242,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
         [ -n "${PIN_FIRST_CPU:-}" ] && echo "      PIN_FIRST_CPU: \"$PIN_FIRST_CPU\""
         [ -n "${TCP_DEFER_ACCEPT:-}" ] && echo "      TCP_DEFER_ACCEPT: \"$TCP_DEFER_ACCEPT\""
         [ -n "${LB_FAST2:-}" ] && echo "      LB_FAST2: \"$LB_FAST2\""
+        [ -n "${LB_PRECONNECT_CONTROL:-}" ] && echo "      LB_PRECONNECT_CONTROL: \"$LB_PRECONNECT_CONTROL\""
         [ -n "${LB_SOCKET_BUFFERS:-}" ] && echo "      LB_SOCKET_BUFFERS: \"$LB_SOCKET_BUFFERS\""
         [ -n "${LB_TCP_NODELAY:-}" ] && echo "      LB_TCP_NODELAY: \"$LB_TCP_NODELAY\""
         [ -n "${SOCKET_BUFFER_SIZE:-}" ] && echo "      SOCKET_BUFFER_SIZE: \"$SOCKET_BUFFER_SIZE\""
@@ -330,6 +335,8 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${ASSUME_BODY_COMPLETE:-}" ] && echo "      ASSUME_BODY_COMPLETE: \"$ASSUME_BODY_COMPLETE\""
       [ -n "${ASSUME_FRAUD_SCORE_PATH:-}" ] && echo "      ASSUME_FRAUD_SCORE_PATH: \"$ASSUME_FRAUD_SCORE_PATH\""
       [ -n "${ASSUME_JSON_BODY_START:-}" ] && echo "      ASSUME_JSON_BODY_START: \"$ASSUME_JSON_BODY_START\""
+      [ -n "${FASTPATH_CANARY_REQUESTS:-}" ] && echo "      FASTPATH_CANARY_REQUESTS: \"$FASTPATH_CANARY_REQUESTS\""
+      [ -n "${FASTPATH_CANARY_INTERVAL:-}" ] && echo "      FASTPATH_CANARY_INTERVAL: \"$FASTPATH_CANARY_INTERVAL\""
       [ -n "${EPOLL_ET:-}" ] && echo "      EPOLL_ET: \"$EPOLL_ET\""
       [ -n "${PIN_FIRST_CPU:-}" ] && echo "      PIN_FIRST_CPU: \"$PIN_FIRST_CPU\""
       [ -n "${FD_CONTROL_SEQPACKET:-}" ] && echo "      FD_CONTROL_SEQPACKET: \"$FD_CONTROL_SEQPACKET\""
@@ -345,6 +352,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${DOTNET_GCConserveMemory:-}" ] && echo "      DOTNET_GCConserveMemory: \"$DOTNET_GCConserveMemory\""
       [ -n "${DOTNET_EnableDiagnostics:-}" ] && echo "      DOTNET_EnableDiagnostics: \"$DOTNET_EnableDiagnostics\""
       [ -n "${GC_LATENCY_MODE:-}" ] && echo "      GC_LATENCY_MODE: \"$GC_LATENCY_MODE\""
+      [ -n "${CLASSIFIER_PREWARM:-}" ] && echo "      CLASSIFIER_PREWARM: \"$CLASSIFIER_PREWARM\""
       [ -n "${TP_PREWARM:-}" ] && echo "      TP_PREWARM: \"$TP_PREWARM\""
       [ -n "${TP_PREFER_LOCAL:-}" ] && echo "      TP_PREFER_LOCAL: \"$TP_PREFER_LOCAL\""
       [ -n "${TP_MIN_THREADS:-}" ] && echo "      TP_MIN_THREADS: \"$TP_MIN_THREADS\""
@@ -430,6 +438,7 @@ docker run --rm \
   -e MAX_VUS \
   -e REQUEST_TIMEOUT \
   -e DUMP_MISMATCHES \
+  -e PAYLOAD_VARIANT \
   -v "$TEST_MOUNT:/scripts" \
   "$K6_IMAGE" run /scripts/rinha-test.js
 

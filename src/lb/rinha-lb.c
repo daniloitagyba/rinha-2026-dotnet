@@ -64,6 +64,7 @@ static int lb_fast2 = 0;
 static int lb_socket_buffers = 1;
 static int lb_tcp_nodelay = 1;
 static int lb_fdpass_nonblock = 0;
+static int lb_preconnect_control = 1;
 static int fd_control_prebuffer = 0;
 static int epoll_et = 0;
 static int socket_buffer_size = 16384;
@@ -287,6 +288,16 @@ static int ensure_control(unsigned int index) {
     int fd = connect_control(index);
     control_fds[index] = fd;
     return fd;
+}
+
+static void preconnect_controls(void) {
+    if (!lb_preconnect_control) {
+        return;
+    }
+
+    for (unsigned int i = 0; i < backend_count; i++) {
+        (void)ensure_control(i);
+    }
 }
 
 static int send_fd(int control_fd, int fd_to_send, const unsigned char *prebuffer, size_t prebuffer_length) {
@@ -538,6 +549,7 @@ static int run_fdpass(int listener, int port) {
         return 1;
     }
 
+    preconnect_controls();
     fprintf(stderr, "serving fdpass load balancer on 0.0.0.0:%d\n", port);
 
     struct epoll_event events[MAX_EVENTS];
@@ -728,6 +740,7 @@ int main(void) {
     lb_socket_buffers = env_enabled("LB_SOCKET_BUFFERS", 1);
     lb_tcp_nodelay = env_enabled("LB_TCP_NODELAY", 1);
     lb_fdpass_nonblock = env_enabled("LB_FDPASS_NONBLOCK", 0);
+    lb_preconnect_control = env_enabled("LB_PRECONNECT_CONTROL", 1);
     fd_control_prebuffer = env_enabled("FD_CONTROL_PREBUFFER", 0);
     epoll_et = env_enabled("EPOLL_ET", 0);
     const char *buffer_env = getenv("SOCKET_BUFFER_SIZE");

@@ -31,10 +31,55 @@ The current safe default keeps:
 - `TP_MIN_THREADS=64`
 - `TP_MIN_IO_THREADS=4`
 - `lb.sysctls.net.core.somaxconn=65535`
+- `LB_PRECONNECT_CONTROL=1` in fdpass LB, to open backend control channels
+  before the first client traffic when possible.
 
 Reason: after the reference/test data changed, aggressive profile fast paths
 created false positives/false negatives remotely. The safe path prioritizes
 zero detection errors.
+
+## Final Test Preparation
+
+Implemented guards for final-test drift:
+
+- `SearchParams.WithoutFastPaths()` gives the API a safe classifier profile
+  that disables profile/bucket fast paths while preserving candidate limits.
+- `FASTPATH_CANARY_REQUESTS` and `FASTPATH_CANARY_INTERVAL` can sample fast
+  path decisions against the safe classifier. On the first divergence, the API
+  disables fast paths process-wide and returns the safe result for that request.
+- `CLASSIFIER_PREWARM` can warm native JSON parsing, native KD-tree search,
+  and safe fallback search during API startup.
+- `PAYLOAD_VARIANT` in the k6 runner can test `pretty`, `reordered`,
+  `padded-reordered`, and `mixed` JSON payloads.
+
+Validation on 2026-05-28:
+
+- Conservative final-safe mode, with profile/bucket fast paths off and JSON
+  assumptions off: full local k6 `p99=0.57ms`, `final_score=6000`, zero
+  errors.
+- Optimized profile with light canary
+  (`FASTPATH_CANARY_REQUESTS=256`, `FASTPATH_CANARY_INTERVAL=512`) and
+  `CLASSIFIER_PREWARM=64`: full local k6 `p99=0.57ms`,
+  `final_score=6000`, zero errors.
+- Optimized profile with light canary and `PAYLOAD_VARIANT=mixed`: full local
+  k6 `p99=0.56ms`, `final_score=6000`, zero errors. This validates reordered,
+  pretty, and padded JSON fallbacks against the current data.
+- Forced-bad fast-path thresholds proved the limit of sampling: the light
+  canary missed a rare mismatch and allowed `1` false positive. Strong initial
+  canary (`FASTPATH_CANARY_REQUESTS=4096`, interval `0`) caught the issue and
+  kept zero errors, but raised local p99 to about `0.74ms`.
+- Pressure test above the official local rate (`TARGET_RATE=1200`) had zero
+  classification divergences but still produced `33-36` HTTP timeouts. Treat
+  this as overload/startup sensitivity under non-official load; do not assume a
+  heavier final script is safe without a matching gate.
+
+Decision on 2026-05-28: because the official final test will use a different
+payload after the preview window, publish a final-prep candidate that prioritizes
+zero errors over the preview-best p99. For `submission`, prefer
+`PROFILE_FASTPATH=0`, `BUCKET_FASTPATH=0`, and `ASSUME_* = 0`, with
+`CLASSIFIER_PREWARM=64`. Keep the canary available in the image for diagnostics
+or a later faster candidate, but do not rely on light sampling as a correctness
+proof for unknown data.
 
 ## Remote History
 
@@ -45,6 +90,14 @@ zero detection errors.
   `p99=1.37ms`, `final_score=5864.77`, zero errors.
 - A later `.NET` candidate improved remote to about `p99=1.12ms`,
   `final_score=5949.01`, zero errors.
+- Best current remote result: issue
+  `https://github.com/zanfranceschi/rinha-de-backend-2026/issues/7077`,
+  submission commit `89244ac`, image
+  `ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:8fd4821774e3cd7adde699547dd6663ea4883d99`,
+  `p99=0.98ms`, `final_score=6000`, zero errors.
+  The first attempt with the same image was rejected because remote submission
+  does not allow `security_opt: seccomp=unconfined` or service `sysctls`; keep
+  those options out of the `submission` branch.
 - Current remote goal for `6000`: keep zero errors and reduce p99 to
   `<=1.00ms`.
 

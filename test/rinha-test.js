@@ -12,6 +12,7 @@ const maxVUs = Number(__ENV.MAX_VUS || '250');
 const requestTimeout = __ENV.REQUEST_TIMEOUT || '2001ms';
 const resultsPath = __ENV.RESULTS_PATH || 'test/results.json';
 const dumpMismatches = __ENV.DUMP_MISMATCHES === '1';
+const payloadVariant = __ENV.PAYLOAD_VARIANT || 'default';
 
 const testData = new SharedArray('test-data', function () {
   return JSON.parse(open('./test-data.json')).entries;
@@ -67,7 +68,7 @@ export default function () {
   const expectedApproved = entry.expected_approved;
   const res = http.post(
     `${baseUrl}/fraud-score`,
-    JSON.stringify(entry.request),
+    requestBody(entry.request, idx),
     { headers: { 'Content-Type': 'application/json' }, timeout: requestTimeout }
   );
 
@@ -92,6 +93,57 @@ export default function () {
   } else {
     errorCount.add(1);
   }
+}
+
+function requestBody(request, idx) {
+  switch (payloadVariant) {
+    case 'pretty':
+      return JSON.stringify(request, null, 2);
+    case 'reordered':
+      return JSON.stringify(reorderRequest(request));
+    case 'padded-reordered':
+      return `\n${JSON.stringify(reorderRequest(request), null, 2)}\n`;
+    case 'mixed':
+      if (idx % 3 === 0) return JSON.stringify(request, null, 2);
+      if (idx % 3 === 1) return JSON.stringify(reorderRequest(request));
+      return `\n${JSON.stringify(reorderRequest(request), null, 2)}\n`;
+    default:
+      return JSON.stringify(request);
+  }
+}
+
+function reorderRequest(request) {
+  const last = request.last_transaction
+    ? {
+        km_from_current: request.last_transaction.km_from_current,
+        timestamp: request.last_transaction.timestamp,
+      }
+    : null;
+
+  return {
+    terminal: {
+      km_from_home: request.terminal.km_from_home,
+      card_present: request.terminal.card_present,
+      is_online: request.terminal.is_online,
+    },
+    merchant: {
+      avg_amount: request.merchant.avg_amount,
+      mcc: request.merchant.mcc,
+      id: request.merchant.id,
+    },
+    customer: {
+      known_merchants: request.customer.known_merchants,
+      tx_count_24h: request.customer.tx_count_24h,
+      avg_amount: request.customer.avg_amount,
+    },
+    transaction: {
+      requested_at: request.transaction.requested_at,
+      installments: request.transaction.installments,
+      amount: request.transaction.amount,
+    },
+    last_transaction: last,
+    id: request.id,
+  };
 }
 
 export function handleSummary(data) {

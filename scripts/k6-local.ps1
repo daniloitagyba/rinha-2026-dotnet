@@ -54,6 +54,8 @@ param(
     [string]$AssumeBodyComplete = $env:ASSUME_BODY_COMPLETE,
     [string]$AssumeFraudScorePath = $env:ASSUME_FRAUD_SCORE_PATH,
     [string]$AssumeJsonBodyStart = $env:ASSUME_JSON_BODY_START,
+    [string]$FastPathCanaryRequests = $env:FASTPATH_CANARY_REQUESTS,
+    [string]$FastPathCanaryInterval = $env:FASTPATH_CANARY_INTERVAL,
     [string]$ServerMode = $env:SERVER_MODE,
     [string]$IndexHugePages = $env:INDEX_HUGEPAGES,
     [string]$DotnetProcessorCount = $env:DOTNET_PROCESSOR_COUNT,
@@ -62,6 +64,7 @@ param(
     [string]$DotnetGCConserveMemory = $env:DOTNET_GCConserveMemory,
     [string]$DotnetEnableDiagnostics = $env:DOTNET_EnableDiagnostics,
     [string]$GcLatencyMode = $env:GC_LATENCY_MODE,
+    [string]$ClassifierPrewarm = $env:CLASSIFIER_PREWARM,
     [string]$ThreadPoolPrewarm = $env:TP_PREWARM,
     [string]$ThreadPoolMinThreads = $env:TP_MIN_THREADS,
     [string]$ThreadPoolMinIoThreads = $env:TP_MIN_IO_THREADS,
@@ -78,6 +81,8 @@ param(
     [string]$LbMemory = $env:LB_MEMORY,
     [string]$LbCpuset = $env:LB_CPUSET,
     [string]$TcpDeferAccept = $env:TCP_DEFER_ACCEPT,
+    [string]$LbPreconnectControl = $env:LB_PRECONNECT_CONTROL,
+    [string]$PayloadVariant = $env:PAYLOAD_VARIANT,
     [string]$SubmissionComposeFile = $env:SUBMISSION_COMPOSE_FILE,
     [string]$ExtraComposeFile = $env:EXTRA_COMPOSE_FILE,
     [switch]$KeepServices,
@@ -192,6 +197,8 @@ $apiOverrides = [ordered]@{
     "ASSUME_BODY_COMPLETE" = $AssumeBodyComplete
     "ASSUME_FRAUD_SCORE_PATH" = $AssumeFraudScorePath
     "ASSUME_JSON_BODY_START" = $AssumeJsonBodyStart
+    "FASTPATH_CANARY_REQUESTS" = $FastPathCanaryRequests
+    "FASTPATH_CANARY_INTERVAL" = $FastPathCanaryInterval
     "SERVER_MODE" = $ServerMode
     "INDEX_HUGEPAGES" = $IndexHugePages
     "DOTNET_PROCESSOR_COUNT" = $DotnetProcessorCount
@@ -200,6 +207,7 @@ $apiOverrides = [ordered]@{
     "DOTNET_GCConserveMemory" = $DotnetGCConserveMemory
     "DOTNET_EnableDiagnostics" = $DotnetEnableDiagnostics
     "GC_LATENCY_MODE" = $GcLatencyMode
+    "CLASSIFIER_PREWARM" = $ClassifierPrewarm
     "TP_PREWARM" = $ThreadPoolPrewarm
     "TP_MIN_THREADS" = $ThreadPoolMinThreads
     "TP_MIN_IO_THREADS" = $ThreadPoolMinIoThreads
@@ -236,7 +244,8 @@ $hasCpusetOverrides =
     -not [string]::IsNullOrWhiteSpace($LbCpuset)
 
 $hasLbEnvironmentOverrides =
-    -not [string]::IsNullOrWhiteSpace($TcpDeferAccept)
+    -not [string]::IsNullOrWhiteSpace($TcpDeferAccept) -or
+    -not [string]::IsNullOrWhiteSpace($LbPreconnectControl)
 
 $hasSocketMountOverride =
     -not [string]::IsNullOrWhiteSpace($SocketsMount)
@@ -259,6 +268,10 @@ if ($activeApiOverrides.Count -gt 0 -or $hasResourceOverrides -or $hasCpusetOver
             $lines += "    environment:"
             if (-not [string]::IsNullOrWhiteSpace($TcpDeferAccept)) {
                 $lines += "      TCP_DEFER_ACCEPT: `"$TcpDeferAccept`""
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($LbPreconnectControl)) {
+                $lines += "      LB_PRECONNECT_CONTROL: `"$LbPreconnectControl`""
             }
 
         }
@@ -384,6 +397,7 @@ try {
         "-e", "PRE_ALLOCATED_VUS",
         "-e", "MAX_VUS",
         "-e", "REQUEST_TIMEOUT",
+        "-e", "PAYLOAD_VARIANT=$PayloadVariant",
         "-v", $mount,
         $K6Image,
         "run", "/scripts/rinha-test.js"

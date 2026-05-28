@@ -36,6 +36,8 @@ internal readonly struct SearchParams
     public readonly int ExactFallback;
     public readonly bool EarlyEdgeFallback;
 
+    public bool UsesFastPaths => ProfileFastPath || ProfileDominantFastPath || BucketFastPath;
+
     public SearchParams(
         int earlyCandidates,
         int minCandidates,
@@ -125,6 +127,37 @@ internal readonly struct SearchParams
             EnvBool("BUCKET_FRAUD_NO_LAST_ONLY", false),
             ExactFallbackMode(Environment.GetEnvironmentVariable("EXACT_FALLBACK")),
             EnvBool("EARLY_EDGE_FALLBACK", false));
+    }
+
+    public SearchParams WithoutFastPaths()
+    {
+        return new SearchParams(
+            EarlyCandidates,
+            MinCandidates,
+            MaxCandidates,
+            Flat,
+            false,
+            ProfileMinCount,
+            ProfileLegitMinCount,
+            ProfileFraudMinCount,
+            ProfileFraudAmountMin,
+            false,
+            ProfileFraudLowAmountKmHomeMin,
+            ProfileFraudLowAmountTx24hMin,
+            false,
+            ProfileFraudMidAmountMin,
+            false,
+            false,
+            ProfileDominantMinCount,
+            ProfileDominantMaxOpposite,
+            false,
+            false,
+            false,
+            BucketLegitMinCount,
+            BucketFraudMinCount,
+            false,
+            ExactFallback,
+            EarlyEdgeFallback);
     }
 
     private static int EnvInt(string name, int fallback)

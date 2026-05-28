@@ -23,6 +23,7 @@ internal static class HttpServer
     private static readonly byte[] Denied06ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:36\r\n\r\n{\"approved\":false,\"fraud_score\":0.6}"u8.ToArray();
     private static readonly byte[] Denied08ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:36\r\n\r\n{\"approved\":false,\"fraud_score\":0.8}"u8.ToArray();
     private static readonly byte[] Denied10ResponseBytes = "HTTP/1.1 200 OK\r\nContent-Length:36\r\n\r\n{\"approved\":false,\"fraud_score\":1.0}"u8.ToArray();
+    private static readonly byte[] WarmupPayloadBytes = "{\"id\":\"warmup\",\"transaction\":{\"amount\":9505.97,\"installments\":10,\"requested_at\":\"2026-03-14T05:15:12Z\"},\"customer\":{\"avg_amount\":81.28,\"tx_count_24h\":20,\"known_merchants\":[\"MERC-008\",\"MERC-007\",\"MERC-005\"]},\"merchant\":{\"id\":\"MERC-068\",\"mcc\":\"7802\",\"avg_amount\":54.86},\"terminal\":{\"is_online\":false,\"card_present\":true,\"km_from_home\":952.27},\"last_transaction\":null}"u8.ToArray();
     private static ReadOnlySpan<byte> ReadyResponse => ReadyResponseBytes;
     private static ReadOnlySpan<byte> NotFoundResponse => NotFoundResponseBytes;
     private static ReadOnlySpan<byte> DefaultResponse => DefaultResponseBytes;
@@ -41,6 +42,10 @@ internal static class HttpServer
     private static readonly bool FdPreRead = EnvBool("FD_PRE_READ", false);
     private static readonly bool TcpQuickAck = EnvBool("TCP_QUICKACK", false);
     private static readonly bool ThreadPoolPreferLocal = EnvBool("TP_PREFER_LOCAL", false);
+    private static readonly int FastPathCanaryRequests = Math.Max(0, EnvInt("FASTPATH_CANARY_REQUESTS", 0));
+    private static readonly int FastPathCanaryInterval = Math.Max(0, EnvInt("FASTPATH_CANARY_INTERVAL", 0));
+    private static long fastPathCanarySeen;
+    private static int fastPathsDisabled;
 
     public static void Serve()
     {
@@ -71,6 +76,7 @@ internal static class HttpServer
 
         var configuredMinThreads = ApplyThreadPoolTuning(minThreads, minIoThreads, maxThreads, maxIoThreads);
         PrewarmThreadPool(configuredMinThreads);
+        PrewarmClassifier(index, searchParams);
 
         var asyncMode = string.Equals(Environment.GetEnvironmentVariable("SERVER_MODE"), "raw-async", StringComparison.OrdinalIgnoreCase);
         if (bindAddress.StartsWith("fd:", StringComparison.Ordinal))
@@ -175,6 +181,35 @@ internal static class HttpServer
         _ = started.Wait(TimeSpan.FromMilliseconds(750));
         release.Set();
         Console.Error.WriteLine($"threadpool prewarm requested={target}, started={target - started.CurrentCount}");
+    }
+
+    private static void PrewarmClassifier(BinaryIndex index, SearchParams searchParams)
+    {
+        var target = EnvInt("CLASSIFIER_PREWARM", 0);
+        if (target <= 0)
+        {
+            return;
+        }
+
+        Span<short> query = stackalloc short[Constants.PaddedDim];
+        if (!QueryBuilder.TryBuildQuery(WarmupPayloadBytes, query))
+        {
+            return;
+        }
+
+        var activeParams = ActiveSearchParams(searchParams);
+        var safeParams = activeParams.WithoutFastPaths();
+        for (var i = 0; i < target; i++)
+        {
+            _ = index.TryClassifyFraudCountJson(WarmupPayloadBytes, activeParams, out _);
+            _ = index.ClassifyFraudCount(query, activeParams);
+            if (activeParams.UsesFastPaths)
+            {
+                _ = index.ClassifyFraudCount(query, safeParams);
+            }
+        }
+
+        Console.Error.WriteLine($"classifier prewarm requested={target}");
     }
 
     private static async Task AcceptLoopAsync(Socket listener, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, int keepAliveIdleMs)
@@ -940,6 +975,89 @@ internal static class HttpServer
         public int InitialLength { get; }
     }
 
+    [SkipLocalsInit]
+    private static bool TryClassifyFraudCountJsonGuarded(
+        BinaryIndex index,
+        ReadOnlySpan<byte> body,
+        in SearchParams searchParams,
+        out int fraudCount)
+    {
+        var activeParams = ActiveSearchParams(searchParams);
+        if (!index.TryClassifyFraudCountJson(body, activeParams, out fraudCount))
+        {
+            return false;
+        }
+
+        if (!ShouldRunFastPathCanary(activeParams))
+        {
+            return true;
+        }
+
+        Span<short> query = stackalloc short[Constants.PaddedDim];
+        if (!QueryBuilder.TryBuildQuery(body, query))
+        {
+            return true;
+        }
+
+        fraudCount = CompareCanary(index, query, activeParams, fraudCount);
+        return true;
+    }
+
+    [SkipLocalsInit]
+    private static int ClassifyFraudCountGuarded(
+        BinaryIndex index,
+        ReadOnlySpan<short> query,
+        in SearchParams searchParams)
+    {
+        var activeParams = ActiveSearchParams(searchParams);
+        var fraudCount = index.ClassifyFraudCount(query, activeParams);
+        return ShouldRunFastPathCanary(activeParams)
+            ? CompareCanary(index, query, activeParams, fraudCount)
+            : fraudCount;
+    }
+
+    private static SearchParams ActiveSearchParams(in SearchParams searchParams)
+    {
+        return Volatile.Read(ref fastPathsDisabled) == 0 || !searchParams.UsesFastPaths
+            ? searchParams
+            : searchParams.WithoutFastPaths();
+    }
+
+    private static bool ShouldRunFastPathCanary(in SearchParams searchParams)
+    {
+        if (!searchParams.UsesFastPaths ||
+            Volatile.Read(ref fastPathsDisabled) != 0 ||
+            (FastPathCanaryRequests == 0 && FastPathCanaryInterval == 0))
+        {
+            return false;
+        }
+
+        var seen = Interlocked.Increment(ref fastPathCanarySeen);
+        return seen <= FastPathCanaryRequests ||
+               (FastPathCanaryInterval > 0 && seen % FastPathCanaryInterval == 0);
+    }
+
+    private static int CompareCanary(
+        BinaryIndex index,
+        ReadOnlySpan<short> query,
+        in SearchParams activeParams,
+        int fastFraudCount)
+    {
+        var safeFraudCount = index.ClassifyFraudCount(query, activeParams.WithoutFastPaths());
+        if (safeFraudCount == fastFraudCount)
+        {
+            return fastFraudCount;
+        }
+
+        if (Interlocked.Exchange(ref fastPathsDisabled, 1) == 0)
+        {
+            Console.Error.WriteLine(
+                $"fast path disabled by canary: fast={fastFraudCount}, safe={safeFraudCount}, checked={Volatile.Read(ref fastPathCanarySeen)}");
+        }
+
+        return safeFraudCount;
+    }
+
     private static void HandleRequest(
         Socket socket,
         ReadOnlySpan<byte> request,
@@ -964,7 +1082,7 @@ internal static class HttpServer
         {
             var bodyStart = headerEnd + 4;
             var body = request.Slice(bodyStart, contentLength);
-            if (index.TryClassifyFraudCountJson(body, searchParams, out var nativeFraudCount))
+            if (TryClassifyFraudCountJsonGuarded(index, body, searchParams, out var nativeFraudCount))
             {
                 SendDecision(socket, nativeFraudCount);
                 return;
@@ -977,7 +1095,7 @@ internal static class HttpServer
                 return;
             }
 
-            var fraudCount = index.ClassifyFraudCount(query, searchParams);
+            var fraudCount = ClassifyFraudCountGuarded(index, query, searchParams);
             SendDecision(socket, fraudCount);
         }
         catch
@@ -1165,7 +1283,7 @@ internal static class HttpServer
         {
             var bodyStart = headerEnd + 4;
             var body = request.Slice(bodyStart, contentLength);
-            if (index.TryClassifyFraudCountJson(body, searchParams, out var nativeFraudCount))
+            if (TryClassifyFraudCountJsonGuarded(index, body, searchParams, out var nativeFraudCount))
             {
                 return nativeFraudCount switch
                 {
@@ -1184,7 +1302,7 @@ internal static class HttpServer
                 return DefaultResponseBytes;
             }
 
-            var fraudCount = index.ClassifyFraudCount(query, searchParams);
+            var fraudCount = ClassifyFraudCountGuarded(index, query, searchParams);
             return fraudCount switch
             {
                 <= 0 => Approved00ResponseBytes,

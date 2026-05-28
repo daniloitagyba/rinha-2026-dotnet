@@ -1,6 +1,6 @@
 services:
   lb:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:8fd4821774e3cd7adde699547dd6663ea4883d99
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:208d0da52aa614618d3c0614f80c5e09bacb4187
     platform: linux/amd64
     entrypoint: ["rinha-lb"]
     environment:
@@ -23,7 +23,7 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:8fd4821774e3cd7adde699547dd6663ea4883d99
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:208d0da52aa614618d3c0614f80c5e09bacb4187
     platform: linux/amd64
     entrypoint: ["rinha-fraud", "serve"]
     environment:
@@ -32,6 +32,7 @@ services:
       INDEX_HUGEPAGES: "1"
       SERVER_MODE: raw-async
       FD_RAW: "1"
+      CLASSIFIER_PREWARM: "64"
       TP_PREWARM: "64"
       TP_MIN_THREADS: "64"
       TP_MIN_IO_THREADS: "4"
@@ -49,9 +50,11 @@ services:
       PROFILE_DOMINANT_MIN_COUNT: "15"
       PROFILE_DOMINANT_MAX_OPPOSITE: "2"
       BUCKET_FASTPATH: "0"
-      ASSUME_BODY_COMPLETE: "1"
-      ASSUME_FRAUD_SCORE_PATH: "1"
-      ASSUME_JSON_BODY_START: "1"
+      ASSUME_BODY_COMPLETE: "0"
+      ASSUME_FRAUD_SCORE_PATH: "0"
+      ASSUME_JSON_BODY_START: "0"
+      FASTPATH_CANARY_REQUESTS: "0"
+      FASTPATH_CANARY_INTERVAL: "0"
       EXACT_FALLBACK: "risky"
       EARLY_EDGE_FALLBACK: "1"
       RISKY_BUCKETS: "1"
@@ -65,8 +68,6 @@ services:
       RISKY_TX24H_MAX: "5800"
       RISKY_MERCHANT_AVG_MAX: "420"
       RISKY_NATIVE_FINE: "1"
-      NATIVE_ANN: "1"
-      KDTREE_INDEX: "1"
       KDTREE_NATIVE: "1"
       DOTNET_EnableDiagnostics: "0"
     volumes:
@@ -82,7 +83,7 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:8fd4821774e3cd7adde699547dd6663ea4883d99
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:208d0da52aa614618d3c0614f80c5e09bacb4187
     platform: linux/amd64
     entrypoint: ["rinha-fraud", "serve"]
     environment:
@@ -91,6 +92,7 @@ services:
       INDEX_HUGEPAGES: "1"
       SERVER_MODE: raw-async
       FD_RAW: "1"
+      CLASSIFIER_PREWARM: "64"
       TP_PREWARM: "64"
       TP_MIN_THREADS: "64"
       TP_MIN_IO_THREADS: "4"
@@ -108,9 +110,11 @@ services:
       PROFILE_DOMINANT_MIN_COUNT: "15"
       PROFILE_DOMINANT_MAX_OPPOSITE: "2"
       BUCKET_FASTPATH: "0"
-      ASSUME_BODY_COMPLETE: "1"
-      ASSUME_FRAUD_SCORE_PATH: "1"
-      ASSUME_JSON_BODY_START: "1"
+      ASSUME_BODY_COMPLETE: "0"
+      ASSUME_FRAUD_SCORE_PATH: "0"
+      ASSUME_JSON_BODY_START: "0"
+      FASTPATH_CANARY_REQUESTS: "0"
+      FASTPATH_CANARY_INTERVAL: "0"
       EXACT_FALLBACK: "risky"
       EARLY_EDGE_FALLBACK: "1"
       RISKY_BUCKETS: "1"
@@ -124,8 +128,6 @@ services:
       RISKY_TX24H_MAX: "5800"
       RISKY_MERCHANT_AVG_MAX: "420"
       RISKY_NATIVE_FINE: "1"
-      NATIVE_ANN: "1"
-      KDTREE_INDEX: "1"
       KDTREE_NATIVE: "1"
       DOTNET_EnableDiagnostics: "0"
     volumes:

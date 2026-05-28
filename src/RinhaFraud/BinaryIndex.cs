@@ -10,6 +10,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+using System.Text;
 
 internal unsafe sealed class BinaryIndex : IDisposable
 {
@@ -46,6 +47,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private const uint SectionKdVectors = 18;
     private const uint SectionKdLabels = 19;
     private const uint SectionKdIds = 20;
+    private const uint SectionBuildInfo = 21;
     private const int KdPartitionCount = 256;
     private const int KdVectorStride = 16;
     private const int KdPartitionRecordSize = 72;
@@ -106,8 +108,16 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly bool _useIvfOrder;
     private readonly bool _useMappedSimd;
     private readonly bool _useBlockScan;
+    private readonly bool _fastPathReferenceAllowed;
+    private readonly string _buildInfo;
+    private readonly string _referenceGzipSha256;
+    private readonly string _referenceJsonSha256;
 
     public int RiskyFallbackCount => HasMappedRisky ? _riskyMappedCount : _useRiskyCompact ? _riskyFallbackLabels.Length : _riskyFallbackIds.Length;
+    public string BuildInfo => _buildInfo;
+    public string ReferenceGzipSha256 => _referenceGzipSha256;
+    public string ReferenceJsonSha256 => _referenceJsonSha256;
+    public bool FastPathReferenceAllowed => _fastPathReferenceAllowed;
     private bool HasMappedRisky => _riskyMappedCount > 0;
 
     private BinaryIndex(
@@ -164,7 +174,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
         bool useNativeKd,
         bool useIvfOrder,
         bool useMappedSimd,
-        bool useBlockScan)
+        bool useBlockScan,
+        bool fastPathReferenceAllowed,
+        string buildInfo,
+        string referenceGzipSha256,
+        string referenceJsonSha256)
     {
         _mappedFile = mappedFile;
         _accessor = accessor;
@@ -228,6 +242,10 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _useIvfOrder = useIvfOrder;
         _useMappedSimd = useMappedSimd;
         _useBlockScan = useBlockScan && blockVectorsOffset != 0;
+        _fastPathReferenceAllowed = fastPathReferenceAllowed;
+        _buildInfo = buildInfo;
+        _referenceGzipSha256 = referenceGzipSha256;
+        _referenceJsonSha256 = referenceJsonSha256;
     }
 
     public static BinaryIndex Open(string path)
@@ -307,6 +325,12 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var sections = version >= 2 && extensionDirectoryOffset != 0
                 ? ReadExtensionSections(ptr, fileLength, extensionDirectoryOffset)
                 : default;
+            var buildInfo = ReadBuildInfo(ptr, sections);
+            var referenceGzipSha256 = BuildInfoValue(buildInfo, "references_gzip_sha256");
+            var referenceJsonSha256 = BuildInfoValue(buildInfo, "references_json_sha256");
+            VerifyExpectedReference("EXPECTED_REFERENCES_GZIP_SHA256", referenceGzipSha256, "references_gzip_sha256");
+            VerifyExpectedReference("EXPECTED_REFERENCES_JSON_SHA256", referenceJsonSha256, "references_json_sha256");
+            var fastPathReferenceAllowed = IsFastPathReferenceAllowed(referenceGzipSha256, referenceJsonSha256);
 
             uint[] bucketCounts;
             uint[] bucketFraudCounts;
@@ -501,7 +525,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 useNativeKd,
                 useIvfOrder,
                 useMappedSimd,
-                useBlockScan);
+                useBlockScan,
+                fastPathReferenceAllowed,
+                buildInfo,
+                referenceGzipSha256,
+                referenceJsonSha256);
         }
         catch
         {
@@ -735,8 +763,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
 
         fixed (byte* bodyPtr = body)
         {
-            var useProfileNative = searchParams.ProfileFastPath && _profileCountsOffset != 0 && _profileLabelMasksOffset != 0;
-            var useBucketNative = searchParams.BucketFastPath && _bucketCountsHandle.IsAllocated && _bucketFraudCountsHandle.IsAllocated;
+            var useProfileNative = _fastPathReferenceAllowed && searchParams.ProfileFastPath && _profileCountsOffset != 0 && _profileLabelMasksOffset != 0;
+            var useBucketNative = _fastPathReferenceAllowed && searchParams.BucketFastPath && _bucketCountsHandle.IsAllocated && _bucketFraudCountsHandle.IsAllocated;
             var result = useProfileNative || useBucketNative
                 ? NativeClassifyJsonProfileKdTreeAvx2(
                     _ptr + _kdPartitionsOffset,
@@ -1831,7 +1859,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private bool TryProfileFastDecision(ReadOnlySpan<short> query, in SearchParams searchParams, out int fraudCount)
     {
         fraudCount = 0;
-        if (!searchParams.ProfileFastPath)
+        if (!searchParams.ProfileFastPath || !_fastPathReferenceAllowed)
         {
             return false;
         }
@@ -2392,6 +2420,89 @@ internal unsafe sealed class BinaryIndex : IDisposable
         return offset > 0 && length == expectedLength;
     }
 
+    private static string ReadBuildInfo(byte* ptr, in SectionDirectory sections)
+    {
+        if (sections.BuildInfoOffset == 0 || sections.BuildInfoLength <= 0 || sections.BuildInfoLength > 4096)
+        {
+            return string.Empty;
+        }
+
+        return Encoding.ASCII.GetString(ptr + sections.BuildInfoOffset, checked((int)sections.BuildInfoLength));
+    }
+
+    private static string BuildInfoValue(string buildInfo, string key)
+    {
+        if (string.IsNullOrEmpty(buildInfo))
+        {
+            return string.Empty;
+        }
+
+        var needle = key + "=";
+        var start = 0;
+        while (start < buildInfo.Length)
+        {
+            var end = buildInfo.IndexOf('\n', start);
+            if (end < 0)
+            {
+                end = buildInfo.Length;
+            }
+
+            if (end - start > needle.Length &&
+                string.CompareOrdinal(buildInfo, start, needle, 0, needle.Length) == 0)
+            {
+                return buildInfo.Substring(start + needle.Length, end - start - needle.Length).Trim();
+            }
+
+            start = end + 1;
+        }
+
+        return string.Empty;
+    }
+
+    private static void VerifyExpectedReference(string envName, string actual, string label)
+    {
+        var expected = Environment.GetEnvironmentVariable(envName);
+        if (string.IsNullOrWhiteSpace(expected))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(actual))
+        {
+            throw new InvalidOperationException($"index missing {label}; cannot verify {envName}");
+        }
+
+        if (!MatchesAnyExpected(expected, actual))
+        {
+            throw new InvalidOperationException($"index {label} mismatch: expected {expected}, actual {actual}");
+        }
+    }
+
+    private static bool IsFastPathReferenceAllowed(string referenceGzipSha256, string referenceJsonSha256)
+    {
+        var expected = Environment.GetEnvironmentVariable("PROFILE_FASTPATH_REFERENCE_SHA256");
+        if (string.IsNullOrWhiteSpace(expected))
+        {
+            return false;
+        }
+
+        return (!string.IsNullOrWhiteSpace(referenceGzipSha256) && MatchesAnyExpected(expected, referenceGzipSha256)) ||
+               (!string.IsNullOrWhiteSpace(referenceJsonSha256) && MatchesAnyExpected(expected, referenceJsonSha256));
+    }
+
+    private static bool MatchesAnyExpected(string expectedList, string actual)
+    {
+        foreach (var item in expectedList.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (string.Equals(item, actual, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static SectionDirectory ReadExtensionSections(byte* ptr, long fileLength, long directoryOffset)
     {
         if (directoryOffset < HeaderLength || directoryOffset + 16 > fileLength)
@@ -2510,6 +2621,10 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 case SectionKdIds:
                     sections.KdIdsOffset = offset;
                     sections.KdIdsLength = length;
+                    break;
+                case SectionBuildInfo:
+                    sections.BuildInfoOffset = offset;
+                    sections.BuildInfoLength = length;
                     break;
             }
         }
@@ -2985,6 +3100,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
         public long KdLabelsLength;
         public long KdIdsOffset;
         public long KdIdsLength;
+        public long BuildInfoOffset;
+        public long BuildInfoLength;
     }
 
     private static int EnvInt(string name, int fallback)

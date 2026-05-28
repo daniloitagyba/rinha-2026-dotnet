@@ -46,6 +46,20 @@ internal static class Program
                 EvalCommand.Run(args[1]);
                 return 0;
 
+            case "index-info":
+                if (args.Length != 2)
+                {
+                    Console.Error.WriteLine("usage: rinha-fraud index-info <references.idx>");
+                    return 2;
+                }
+
+                using (var index = BinaryIndex.Open(args[1]))
+                {
+                    Console.Write(index.BuildInfo);
+                }
+
+                return 0;
+
             case "self-test":
                 SelfTest.Run();
                 return 0;
@@ -56,6 +70,7 @@ internal static class Program
                 Console.WriteLine("  rinha-fraud serve");
                 Console.WriteLine("  rinha-fraud build-index <output.idx> < references.json");
                 Console.WriteLine("  rinha-fraud eval <test-data.json>");
+                Console.WriteLine("  rinha-fraud index-info <references.idx>");
                 Console.WriteLine("  rinha-fraud self-test");
                 return 0;
 

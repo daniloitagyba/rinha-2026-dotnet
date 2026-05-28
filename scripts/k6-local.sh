@@ -127,6 +127,9 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${MIN_CANDIDATES:-}" ] || \
    [ -n "${MAX_CANDIDATES:-}" ] || \
    [ -n "${PROFILE_FASTPATH:-}" ] || \
+   [ -n "${PROFILE_FASTPATH_REFERENCE_SHA256:-}" ] || \
+   [ -n "${EXPECTED_REFERENCES_GZIP_SHA256:-}" ] || \
+   [ -n "${EXPECTED_REFERENCES_JSON_SHA256:-}" ] || \
    [ -n "${PROFILE_MIN_COUNT:-}" ] || \
    [ -n "${PROFILE_LEGIT_MIN_COUNT:-}" ] || \
    [ -n "${PROFILE_FRAUD_MIN_COUNT:-}" ] || \
@@ -281,6 +284,9 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${MIN_CANDIDATES:-}" ] && echo "      MIN_CANDIDATES: \"$MIN_CANDIDATES\""
       [ -n "${MAX_CANDIDATES:-}" ] && echo "      MAX_CANDIDATES: \"$MAX_CANDIDATES\""
       [ -n "${PROFILE_FASTPATH:-}" ] && echo "      PROFILE_FASTPATH: \"$PROFILE_FASTPATH\""
+      [ -n "${PROFILE_FASTPATH_REFERENCE_SHA256:-}" ] && echo "      PROFILE_FASTPATH_REFERENCE_SHA256: \"$PROFILE_FASTPATH_REFERENCE_SHA256\""
+      [ -n "${EXPECTED_REFERENCES_GZIP_SHA256:-}" ] && echo "      EXPECTED_REFERENCES_GZIP_SHA256: \"$EXPECTED_REFERENCES_GZIP_SHA256\""
+      [ -n "${EXPECTED_REFERENCES_JSON_SHA256:-}" ] && echo "      EXPECTED_REFERENCES_JSON_SHA256: \"$EXPECTED_REFERENCES_JSON_SHA256\""
       [ -n "${PROFILE_MIN_COUNT:-}" ] && echo "      PROFILE_MIN_COUNT: \"$PROFILE_MIN_COUNT\""
       [ -n "${PROFILE_LEGIT_MIN_COUNT:-}" ] && echo "      PROFILE_LEGIT_MIN_COUNT: \"$PROFILE_LEGIT_MIN_COUNT\""
       [ -n "${PROFILE_FRAUD_MIN_COUNT:-}" ] && echo "      PROFILE_FRAUD_MIN_COUNT: \"$PROFILE_FRAUD_MIN_COUNT\""

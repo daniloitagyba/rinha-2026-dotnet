@@ -62,6 +62,13 @@ internal static class HttpServer
         ApplyGcLatencyMode();
 
         using var index = BinaryIndex.Open(indexPath);
+        if (!string.IsNullOrWhiteSpace(index.ReferenceGzipSha256) ||
+            !string.IsNullOrWhiteSpace(index.ReferenceJsonSha256))
+        {
+            Console.Error.WriteLine(
+                $"index references_gzip_sha256={index.ReferenceGzipSha256}, references_json_sha256={index.ReferenceJsonSha256}, fastpath_reference_allowed={index.FastPathReferenceAllowed}");
+        }
+
         if (EnvBool("INDEX_HUGEPAGES", false))
         {
             var advised = index.AdviseHugePages();

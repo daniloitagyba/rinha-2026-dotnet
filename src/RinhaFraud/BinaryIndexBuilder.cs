@@ -5,6 +5,8 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 
 internal static class BinaryIndexBuilder
 {
@@ -46,6 +48,7 @@ internal static class BinaryIndexBuilder
     private const uint SectionKdVectors = 18;
     private const uint SectionKdLabels = 19;
     private const uint SectionKdIds = 20;
+    private const uint SectionBuildInfo = 21;
 
     public static void Build(string outputPath, Stream input)
     {
@@ -148,7 +151,7 @@ internal static class BinaryIndexBuilder
             output.Write(fourBytes);
         }
 
-        var extensionDirectoryOffset = WriteExtensionSections(output, vectorSpan, labelSpan, items, nativeOnly);
+        var extensionDirectoryOffset = WriteExtensionSections(output, vectorSpan, labelSpan, items, nativeOnly, scanner.ContentSha256);
         var fileLength = output.Position;
         output.Position = 0;
         WriteHeader(output, labels.Count, vectorsOffset, labelsOffset, bucketOffsetsOffset, bucketItemsOffset, fileLength, extensionDirectoryOffset);
@@ -160,9 +163,10 @@ internal static class BinaryIndexBuilder
         ReadOnlySpan<short> vectors,
         ReadOnlySpan<byte> labels,
         ReadOnlySpan<uint> orderedOriginalIds,
-        bool nativeOnly)
+        bool nativeOnly,
+        string referencesJsonSha256)
     {
-        var sections = new List<SectionEntry>(16);
+        var sections = new List<SectionEntry>(17);
         WriteProfileSections(output, vectors, labels, orderedOriginalIds, sections);
         WriteNeighborOrdersSection(output, sections);
         if (!nativeOnly)
@@ -181,7 +185,48 @@ internal static class BinaryIndexBuilder
             WriteKdTreeSections(output, vectors, labels, orderedOriginalIds, sections);
         }
 
+        WriteBuildInfoSection(output, labels.Length, referencesJsonSha256, sections);
         return WriteExtensionDirectory(output, sections);
+    }
+
+    private static void WriteBuildInfoSection(
+        FileStream output,
+        int referenceCount,
+        string referencesJsonSha256,
+        List<SectionEntry> sections)
+    {
+        var builder = new StringBuilder(512);
+        AppendBuildInfo(builder, "format", "1");
+        AppendBuildInfo(builder, "reference_count", referenceCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        AppendBuildInfo(builder, "references_json_sha256", referencesJsonSha256);
+        AppendBuildInfo(builder, "references_gzip_sha256", Environment.GetEnvironmentVariable("REFERENCES_GZIP_SHA256"));
+        AppendBuildInfo(builder, "references_checksum_sha256", Environment.GetEnvironmentVariable("REFERENCES_CHECKSUM_SHA256"));
+        AppendBuildInfo(builder, "test_data_sha256", Environment.GetEnvironmentVariable("TEST_DATA_SHA256"));
+        AppendBuildInfo(builder, "kdtree_leaf_size", EnvInt("KDTREE_LEAF_SIZE", KdDefaultLeafSize).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        AppendBuildInfo(builder, "kdtree_key_profile", KdKeyProfile.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        AppendBuildInfo(builder, "build_block_index", EnvBool("BUILD_BLOCK_INDEX", false) ? "1" : "0");
+        AppendBuildInfo(builder, "build_native_only_index", EnvBool("BUILD_NATIVE_ONLY_INDEX", false) ? "1" : "0");
+        AppendBuildInfo(builder, "build_kdtree_index", EnvBool("BUILD_KDTREE_INDEX", false) ? "1" : "0");
+
+        var bytes = Encoding.ASCII.GetBytes(builder.ToString());
+        WriteSection(output, SectionBuildInfo, bytes, sections);
+    }
+
+    private static void AppendBuildInfo(StringBuilder builder, string key, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        builder.Append(key);
+        builder.Append('=');
+        foreach (var ch in value)
+        {
+            builder.Append(ch is >= ' ' and <= '~' and not '\r' and not '\n' ? ch : '?');
+        }
+
+        builder.Append('\n');
     }
 
     private static void WriteBlockVectorsSection(
@@ -925,14 +970,18 @@ internal static class BinaryIndexBuilder
     {
         private readonly Stream _input;
         private readonly byte[] _buffer;
+        private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         private int _pos;
         private int _len;
+        private string? _contentSha256;
 
         public JsonScanner(Stream input)
         {
             _input = input;
             _buffer = new byte[64 * 1024];
         }
+
+        public string ContentSha256 => _contentSha256 ??= Convert.ToHexString(_hash.GetHashAndReset()).ToLowerInvariant();
 
         public bool Find(ReadOnlySpan<byte> needle)
         {
@@ -1103,6 +1152,8 @@ internal static class BinaryIndexBuilder
                     value = 0;
                     return false;
                 }
+
+                _hash.AppendData(_buffer, 0, _len);
             }
 
             value = _buffer[_pos++];

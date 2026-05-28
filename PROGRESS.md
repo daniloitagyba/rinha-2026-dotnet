@@ -81,6 +81,64 @@ zero errors over the preview-best p99. For `submission`, prefer
 or a later faster candidate, but do not rely on light sampling as a correctness
 proof for unknown data.
 
+Remote result for that final-prep candidate, issue
+`https://github.com/zanfranceschi/rinha-de-backend-2026/issues/7092`, was worse
+than the previous best: image
+`ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:208d0da52aa614618d3c0614f80c5e09bacb4187`,
+submission commit `18b7d44`, `p99=1.12ms`, `final_score=5950.75`, zero
+errors. The `submission` branch was rolled back to commit `48379b5`, pointing
+again to the best remote image
+`ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:8fd4821774e3cd7adde699547dd6663ea4883d99`.
+
+Next local-only candidate after the rollback: keep profile fast path enabled,
+but turn off the fragile JSON/body/path assumptions:
+
+```sh
+MODE=build \
+PROFILE_FASTPATH=1 \
+PROFILE_LEGIT_MIN_COUNT=15 \
+PROFILE_FRAUD_MIN_COUNT=8 \
+PROFILE_FRAUD_AMOUNT_MIN=4000 \
+PROFILE_FRAUD_LOW_AMOUNT_FASTPATH=1 \
+BUCKET_FASTPATH=0 \
+ASSUME_BODY_COMPLETE=0 \
+ASSUME_FRAUD_SCORE_PATH=0 \
+ASSUME_JSON_BODY_START=0 \
+FASTPATH_CANARY_REQUESTS=0 \
+FASTPATH_CANARY_INTERVAL=0 \
+CLASSIFIER_PREWARM=64 \
+TP_PREWARM=64 \
+TP_MIN_IO_THREADS=4 \
+sh scripts/k6-local.sh
+```
+
+Local results: default payload `p99=0.54ms`, `final_score=6000`, zero errors;
+`PAYLOAD_VARIANT=mixed` `p99=0.55ms`, `final_score=6000`, zero errors. This is
+the best current direction before another remote attempt, but it is still a
+profile fast-path candidate and must be treated as data-sensitive.
+
+Additional final-candidate rechecks after comparing with the current top
+`.NET` entry (`fksegundo/rinha-dotnet`):
+
+- Canary does not improve p99. Short k6: no canary `0.52ms`,
+  `FASTPATH_CANARY_REQUESTS=128` `0.53ms`, `256` `0.54ms`, `512` `0.56ms`;
+  complete k6 with canary `64/128` stayed at `0.55ms`, while no canary
+  rechecked at `0.54ms`.
+- Prewarm tuning did not beat the current candidate. Short k6:
+  `CLASSIFIER_PREWARM=0 TP_PREWARM=0` `0.56ms`,
+  `0/64` `0.53ms`, `64/0` `0.57ms`, `128/64` `0.53ms`.
+  Complete k6: `0/64` `0.55ms`, `128/64` `0.54ms`. Keep
+  `CLASSIFIER_PREWARM=64` and `TP_PREWARM=64` only as the current balanced
+  default.
+- `MALLOC_ARENA_MAX=2` and `DOTNET_gcServer=0`, copied from the top `.NET`
+  runtime posture, did not produce a new candidate. Short k6 sequence on the
+  current profile bundle: baseline `0.55ms`, `MALLOC_ARENA_MAX=2` `0.54ms`,
+  `DOTNET_gcServer=0` `0.55ms`, both `0.54ms`; no case beat the known
+  `0.54ms` full-k6 floor.
+- Rechecking the `.NET` fd event-loop path against the current profile bundle
+  did not change the previous rejection: `FD_EPOLL=1` short k6 was `0.55ms`;
+  a one-receiver/one-worker variant only matched `0.54ms`.
+
 ## Remote History
 
 - Previous official preview data: a `.NET` API version with native KD-tree
@@ -98,6 +156,22 @@ proof for unknown data.
   The first attempt with the same image was rejected because remote submission
   does not allow `security_opt: seccomp=unconfined` or service `sysctls`; keep
   those options out of the `submission` branch.
+- Later final-prep attempt, issue
+  `https://github.com/zanfranceschi/rinha-de-backend-2026/issues/7092`,
+  image
+  `ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:208d0da52aa614618d3c0614f80c5e09bacb4187`,
+  returned `p99=1.12ms`, `final_score=5950.75`, zero errors. Because it was
+  worse than issue `#7077`, `submission` was rolled back to image
+  `8fd4821774e3cd7adde699547dd6663ea4883d99` at commit `48379b5`.
+- Best-local submission attempt, issue
+  `https://github.com/zanfranceschi/rinha-de-backend-2026/issues/7126`,
+  reused image
+  `ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:208d0da52aa614618d3c0614f80c5e09bacb4187`
+  but pinned the validated local runtime config in `submission`: profile fast
+  path on, `ASSUME_* = 0`, no `NATIVE_ANN`, and explicit
+  `CLASSIFIER_PREWARM=64`/`TP_PREWARM=64`. Result: `p99=0.99ms`,
+  `final_score=6000`, zero FP/FN/HTTP errors. `submission` commit:
+  `6ddaa74`.
 - Current remote goal for `6000`: keep zero errors and reduce p99 to
   `<=1.00ms`.
 
@@ -190,8 +264,65 @@ for changed references.
 - `PROFILE_FASTPATH=0` as the safe default after reference changes.
 - Automated reference refresh workflow that rebuilds the index and validates
   before publishing a candidate image.
+- Embedded reference fingerprints in `references.idx`, plus runtime guards
+  (`EXPECTED_REFERENCES_*` and `PROFILE_FASTPATH_REFERENCE_SHA256`) so
+  dataset-sensitive fast paths only run against an explicitly validated
+  reference set.
 
 ## External Repo Findings
+
+- `dalvorsn/cpp-rinha-backend-2026` at `06df468` (checked 2026-05-28):
+  submission branch has only `docker-compose.yml`, `info.json`, and `LICENSE`,
+  with 1 LB + 2 APIs, total CPU `1.00` and total memory `270MB`. No obvious
+  submission-rule violation was found from the tree, but the compose uses the
+  mutable image tag `dalvorsn/rinha-backend-2026:main`; keep using immutable
+  SHA tags in this project.
+- Useful ideas from that repo: IVF index built at image-build time, int16
+  quantization, AVX2 pair-SoA block scan over 8 vectors, SIMD centroid scan,
+  bbox lower-bound repair pass for ambiguous top-5 results, pre-rendered HTTP
+  responses, `mlockall(MCL_CURRENT)`, epoll busy-poll knobs, tmpfs Unix control
+  sockets, and a minimal APM mode with internal latency histograms.
+- What applies here: the IVF/repair design is the only materially new
+  algorithmic direction worth testing against the native KD-tree. Implement it,
+  if tested, inside `librinha_native.so` and keep `api1/api2` entrypoint as
+  `["rinha-fraud", "serve"]`. Do not replace the `.NET` APIs with the C++
+  server. Transport ideas from the repo are mostly already present or already
+  rejected locally: fd handoff, pre-rendered responses, cpuset/split variants,
+  busy poll, `TCP_QUICKACK`, control preconnect, socket buffers, and
+  preinitialized `sendmsg` state.
+- Caution: their IVF is approximate and relies on a repair condition
+  (`cnt in [1,4]`) to recover recall. Before any adoption, gate with native
+  eval on the current references and changed-payload k6; do not combine it with
+  profile fast paths until it has zero FP/FN by itself.
+- Applied/tested the closest existing analogue here, `NATIVE_ANN=1` bucket-IVF
+  with exact repair/fallback for ambiguous `1..4` fraud-neighbor counts. It is
+  not viable: default candidate counts still produced `56 FP` and `6 FN`; even
+  raising candidates to `72000` still had `6 FP` and `1 FN`. Adding a temporary
+  strong-decision distance guard only reached zero errors by forcing exact
+  fallback on almost every request (`ANN_STRONG_MAX_DISTANCE=0`), with eval
+  classifier `p99=9281404ns`. The temporary guard code was removed. Do not run
+  k6 or remote for this path.
+
+- `fksegundo/rinha-dotnet` at `c1f5342` (checked 2026-05-28) is a useful
+  `.NET`-API comparison because the preview result showed score `6000` with
+  p99 about `0.43ms`. Architecture: Native AOT `.NET` APIs, Rust fd-passing LB,
+  epoll/event-loop API runtime, mmap/pretouch/mlock index, and an `RNSPCST2`
+  KD-style index with AVX2 leaf/block scans.
+- No payload-lookup pattern was found in the inspected source. Do not copy the
+  submission posture directly: the submission compose uses mutable `latest` for
+  the API image, `info.json` points at a different source repo, and the
+  submitted API socket paths are not a clean topology template. Keep this repo
+  on immutable SHA tags and the explicit `.NET` API entrypoints.
+- Applicable lessons from that repo are mostly already covered here: fd passing,
+  preconnected control sockets, event-loop fd handling, TCP quickack/nodelay,
+  tmpfs sockets, no Docker logging, cpusets, Native AOT, pre-rendered HTTP
+  responses, mmap/pretouch, and AVX2 distance search. Local rechecks did not
+  produce a better candidate.
+- The only materially new direction is algorithmic, not a small config change:
+  a KD leaf layout that scans 8 vectors as a SIMD block, similar to their
+  `RNSPCST2` layout. Applying it here would require a new KD index section or
+  format version plus native search changes; it should be treated as a separate
+  post-final experiment unless the current final candidate is abandoned.
 
 - `vinicius-piassa/rinha-backend-2026-asm` at `34ea36b` (rechecked
   2026-05-28): runtime compose uses
@@ -995,17 +1126,64 @@ Response/header micro-optimizations:
   and restored about `324GB` free on C:. Check disk space before long matrix
   runs.
 
+## Reference Fingerprint Gate
+
+Implemented on 2026-05-28 to protect score when `resources/references.json.gz`
+changes:
+
+- `references.idx` now stores build metadata: reference count, decompressed
+  JSON SHA-256, gzip SHA-256 when available, KD-tree leaf size and key profile.
+- `rinha-fraud index-info <references.idx>` prints the embedded metadata.
+- `EXPECTED_REFERENCES_GZIP_SHA256` and `EXPECTED_REFERENCES_JSON_SHA256` fail
+  startup/eval if the image carries the wrong index.
+- `PROFILE_FASTPATH_REFERENCE_SHA256` is now required for profile/bucket fast
+  paths to run. If it is absent or does not match the embedded reference hash,
+  those fast paths are disabled.
+- `scripts/k6-local.sh` and `scripts/k6-local.ps1` propagate the reference
+  guard variables into generated compose overrides.
+- `scripts/reference-refresh.sh` now runs `validate-local` without k6 first,
+  then `validate-reference-candidate.sh` for safe eval, gated fast-path eval
+  and k6/mixed k6 when enabled.
+
+Validation:
+
+- Host `dotnet build -c Release` and `self-test`: OK.
+- WSL `validate-reference-candidate.sh` without k6: index metadata matched
+  `references_gzip_sha256=43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67`;
+  safe eval and gated candidate eval both had zero FP/FN/parse errors.
+- WSL official local k6 with the gated candidate:
+  `p99=0.56ms`, `final_score=6000`, zero FP/FN/HTTP errors.
+- WSL `PAYLOAD_VARIANT=mixed` k6 with the same gate:
+  `p99=0.57ms`, `final_score=6000`, zero FP/FN/HTTP errors.
+- WSL `validate-local.sh RUN_K6=0`: OK; the deliberately unsafe profile check
+  still records divergence and keeps the safe default.
+- Wrong `EXPECTED_REFERENCES_GZIP_SHA256` fails with an index hash mismatch
+  before evaluation.
+- `PROFILE_FASTPATH=1` without `PROFILE_FASTPATH_REFERENCE_SHA256` falls back
+  to the safe classifier path: zero errors, safe fraud-count bucket
+  distribution, and eval p99 around `90us` instead of the gated fast-path
+  `36us`.
+
+This does not prove a future unknown reference file will keep remote p99 below
+1ms. It does make the failure mode safer: changed references require rebuilding
+the index, and experimental fast paths are not used unless the new reference
+hash has been explicitly validated.
+
 ## Reference Change Rule
 
 When references change:
 
 1. Rebuild `references.idx`.
-2. Run `validate-local`.
-3. Verify `PROFILE_FASTPATH=0` and `PROFILE_DOMINANT_FASTPATH=0` for the safe
-   path.
-4. Use `EVAL_NATIVE_JSON=1` when validating native JSON fast paths.
-5. Publish a candidate image only after local `eval` and k6 are clean.
-6. Do not move the `submission` branch or open remote automatically.
+2. Verify `index-info` includes the new reference SHA.
+3. Run `validate-local`.
+4. Run `validate-reference-candidate.sh` with safe eval and gated fast-path
+   eval.
+5. Keep `PROFILE_FASTPATH=0` for the safe path, or set
+   `PROFILE_FASTPATH_REFERENCE_SHA256=<new refs sha>` only after the gated
+   candidate is clean.
+6. Use `EVAL_NATIVE_JSON=1` when validating native JSON fast paths.
+7. Publish a candidate image only after local `eval` and k6 are clean.
+8. Do not move the `submission` branch or open remote automatically.
 
 ## Next Plausible Work
 

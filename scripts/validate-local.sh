@@ -9,6 +9,7 @@ FETCH_REFERENCES="${FETCH_REFERENCES:-1}"
 RUN_K6="${RUN_K6:-1}"
 RUN_PROFILE_CHECK="${RUN_PROFILE_CHECK:-1}"
 RUN_NATIVE_CHECK="${RUN_NATIVE_CHECK:-0}"
+CHECK_EXTERNAL_SUBMISSION="${CHECK_EXTERNAL_SUBMISSION:-0}"
 MANIFEST_PATH="${MANIFEST_PATH:-$ROOT/test/dataset-manifest.json}"
 EVAL_LOG="${EVAL_LOG:-$ROOT/test/eval-accuracy.log}"
 NATIVE_EVAL_LOG="${NATIVE_EVAL_LOG:-$ROOT/test/eval-native-accuracy.log}"
@@ -43,24 +44,21 @@ check_compose_safety() {
     exit 1
   }
 
-  grep -q 'PROFILE_FASTPATH: "0"' "$compose_file" || {
-    echo "unsafe $compose_name: PROFILE_FASTPATH must be explicitly disabled" >&2
-    exit 1
-  }
-
   grep -q 'PROFILE_DOMINANT_FASTPATH: "0"' "$compose_file" || {
     echo "unsafe $compose_name: PROFILE_DOMINANT_FASTPATH must be explicitly disabled" >&2
     exit 1
   }
 
   if grep -q 'PROFILE_FASTPATH: "1"' "$compose_file"; then
-    echo "unsafe $compose_name: submitted profile fast path must stay disabled" >&2
-    exit 1
-  fi
-
-  if grep -q 'PROFILE_DOMINANT_FASTPATH: "1"' "$compose_file"; then
-    echo "unsafe $compose_name: submitted dominant profile fast path must stay disabled" >&2
-    exit 1
+    grep -q "PROFILE_FASTPATH_REFERENCE_SHA256: \"$refs_sha\"" "$compose_file" || {
+      echo "unsafe $compose_name: PROFILE_FASTPATH=1 requires PROFILE_FASTPATH_REFERENCE_SHA256 for current references" >&2
+      exit 1
+    }
+  else
+    grep -q 'PROFILE_FASTPATH: "0"' "$compose_file" || {
+      echo "unsafe $compose_name: PROFILE_FASTPATH must be explicitly disabled or reference-gated" >&2
+      exit 1
+    }
   fi
 }
 
@@ -102,8 +100,10 @@ grep -q 'ENV PROFILE_FASTPATH=0' "$ROOT/Dockerfile" || {
 
 check_compose_safety "$ROOT/docker-compose.yml" "docker-compose.yml"
 check_compose_safety "$ROOT/submission/docker-compose.yml" "submission/docker-compose.yml"
-check_compose_safety "$ROOT/../rinha-2026-submission/docker-compose.yml" "../rinha-2026-submission/docker-compose.yml"
-check_compose_safety "/mnt/c/tmp/rinha-2026-submission/docker-compose.yml" "/mnt/c/tmp/rinha-2026-submission/docker-compose.yml"
+if [ "$CHECK_EXTERNAL_SUBMISSION" = "1" ]; then
+  check_compose_safety "$ROOT/../rinha-2026-submission/docker-compose.yml" "../rinha-2026-submission/docker-compose.yml"
+  check_compose_safety "/mnt/c/tmp/rinha-2026-submission/docker-compose.yml" "/mnt/c/tmp/rinha-2026-submission/docker-compose.yml"
+fi
 
 docker build --build-arg TARGETARCH=amd64 -t "$IMAGE" "$ROOT"
 
@@ -145,6 +145,8 @@ if [ "$RUN_PROFILE_CHECK" = "1" ]; then
     -v "$ROOT/test:/test" \
     -e KDTREE_NATIVE=1 \
     -e PROFILE_FASTPATH=1 \
+    -e PROFILE_FASTPATH_REFERENCE_SHA256="$refs_sha" \
+    -e EXPECTED_REFERENCES_GZIP_SHA256="$refs_sha" \
     -e PROFILE_MIN_COUNT=15 \
     -e PROFILE_LEGIT_MIN_COUNT=5 \
     -e PROFILE_FRAUD_MIN_COUNT=15 \

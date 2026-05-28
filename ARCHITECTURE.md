@@ -59,6 +59,10 @@ Removing `fraud_score`, changing response shape or using payload lookup tables
 is outside the accepted architecture.
 
 Fast paths are allowed only as accelerators over the same classifier contract.
+Profile/bucket fast paths are dataset-sensitive and must be explicitly tied to
+the reference fingerprint through `PROFILE_FASTPATH_REFERENCE_SHA256`; without a
+matching fingerprint the `.NET` API disables those fast paths even if
+`PROFILE_FASTPATH=1` is present.
 When enabled, `FASTPATH_CANARY_REQUESTS` / `FASTPATH_CANARY_INTERVAL` can sample
 fast-path results against `SearchParams.WithoutFastPaths()`. If a sampled
 request diverges, the API disables fast paths in that process and returns the
@@ -67,6 +71,10 @@ safe result.
 ## Index And References
 
 The image embeds a binary index at `/app/data/references.idx`.
+The index carries a small build-info section that records reference count,
+decompressed JSON SHA-256, optional gzip SHA-256, KD-tree leaf size and key
+profile. The CLI command `rinha-fraud index-info /app/data/references.idx`
+prints this metadata.
 
 Build-time defaults:
 
@@ -85,6 +93,20 @@ When `resources/references.json.gz` changes, rebuild the index and run local
 validation before any remote issue. Do not assume profile fast paths remain
 correct across reference changes.
 
+Runtime reference guards:
+
+- `EXPECTED_REFERENCES_GZIP_SHA256`: fail API startup/eval if the embedded index
+  was not built from the expected compressed references.
+- `EXPECTED_REFERENCES_JSON_SHA256`: same check for decompressed JSON content.
+- `PROFILE_FASTPATH_REFERENCE_SHA256`: comma-separated allow-list for
+  dataset-sensitive fast paths. If absent or mismatched, profile/bucket fast
+  paths are disabled.
+
+`scripts/reference-refresh.sh` runs the safe validation path and then
+`scripts/validate-reference-candidate.sh`, which verifies index metadata,
+safe `eval`, gated fast-path `eval`, and optional k6 before a reference image is
+considered publishable.
+
 ## Important Runtime Variables
 
 Core:
@@ -102,10 +124,12 @@ Accuracy/default-safe:
 - `PROFILE_FASTPATH=0`
 - `PROFILE_DOMINANT_FASTPATH=0`
 - `EXACT_FALLBACK=risky`
+- `EXPECTED_REFERENCES_GZIP_SHA256` when validating a known reference set
 
 Experimental/default-off:
 
 - `PROFILE_FASTPATH=1` with strict thresholds
+- `PROFILE_FASTPATH_REFERENCE_SHA256=<current references sha256>`
 - `FD_EPOLL=1`
 - `FD_CONTROL_SEQPACKET=1`
 - `FD_CONTROL_PREBUFFER=1`

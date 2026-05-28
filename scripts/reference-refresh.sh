@@ -11,6 +11,7 @@ PROJECT_NAME="${PROJECT_NAME:-rinha-reference-refresh}"
 FORCE_REFRESH="${FORCE_REFRESH:-0}"
 RUN_VALIDATE="${RUN_VALIDATE:-1}"
 RUN_K6="${RUN_K6:-1}"
+RUN_MIXED_K6="${RUN_MIXED_K6:-1}"
 PUSH_IMAGE="${PUSH_IMAGE:-0}"
 UPDATE_STATE="${UPDATE_STATE:-1}"
 
@@ -88,10 +89,16 @@ cp "$WORK_DIR/test-data.json" "$ROOT/test/test-data.json"
 if [ "$RUN_VALIDATE" = "1" ]; then
   REFRESH_DATA=0 \
     FETCH_REFERENCES=1 \
-    RUN_K6="$RUN_K6" \
+    RUN_K6=0 \
     IMAGE="$LOCAL_IMAGE" \
     PROJECT_NAME="$PROJECT_NAME" \
     sh "$ROOT/scripts/validate-local.sh"
+
+  RUN_K6="$RUN_K6" \
+    RUN_MIXED_K6="$RUN_MIXED_K6" \
+    IMAGE="$LOCAL_IMAGE" \
+    PROJECT_NAME="$PROJECT_NAME-candidate" \
+    sh "$ROOT/scripts/validate-reference-candidate.sh"
 fi
 
 if [ "$PUSH_IMAGE" = "1" ]; then

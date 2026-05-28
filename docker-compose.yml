@@ -1,6 +1,6 @@
 services:
   lb:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:208d0da52aa614618d3c0614f80c5e09bacb4187
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:361f6196c117f7203ea1c8e0494ae3e5056b84be
     platform: linux/amd64
     entrypoint: ["rinha-lb"]
     environment:
@@ -23,7 +23,7 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:208d0da52aa614618d3c0614f80c5e09bacb4187
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:361f6196c117f7203ea1c8e0494ae3e5056b84be
     platform: linux/amd64
     entrypoint: ["rinha-fraud", "serve"]
     environment:
@@ -41,6 +41,8 @@ services:
       MIN_CANDIDATES: "9800"
       MAX_CANDIDATES: "11000"
       PROFILE_FASTPATH: "1"
+      PROFILE_FASTPATH_REFERENCE_SHA256: "43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67"
+      EXPECTED_REFERENCES_GZIP_SHA256: "43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67"
       PROFILE_MIN_COUNT: "15"
       PROFILE_LEGIT_MIN_COUNT: "15"
       PROFILE_FRAUD_MIN_COUNT: "8"
@@ -83,7 +85,7 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:208d0da52aa614618d3c0614f80c5e09bacb4187
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:361f6196c117f7203ea1c8e0494ae3e5056b84be
     platform: linux/amd64
     entrypoint: ["rinha-fraud", "serve"]
     environment:
@@ -101,6 +103,8 @@ services:
       MIN_CANDIDATES: "9800"
       MAX_CANDIDATES: "11000"
       PROFILE_FASTPATH: "1"
+      PROFILE_FASTPATH_REFERENCE_SHA256: "43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67"
+      EXPECTED_REFERENCES_GZIP_SHA256: "43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67"
       PROFILE_MIN_COUNT: "15"
       PROFILE_LEGIT_MIN_COUNT: "15"
       PROFILE_FRAUD_MIN_COUNT: "8"

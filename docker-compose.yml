@@ -1,6 +1,6 @@
 services:
   lb:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:361f6196c117f7203ea1c8e0494ae3e5056b84be
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:046225b9a4b4a47089712298d094208b010e0377
     platform: linux/amd64
     entrypoint: ["rinha-lb"]
     environment:
@@ -23,7 +23,7 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:361f6196c117f7203ea1c8e0494ae3e5056b84be
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:046225b9a4b4a47089712298d094208b010e0377
     platform: linux/amd64
     entrypoint: ["rinha-fraud", "serve"]
     environment:
@@ -32,6 +32,8 @@ services:
       INDEX_HUGEPAGES: "1"
       SERVER_MODE: raw-async
       FD_RAW: "1"
+      FD_EPOLL: "1"
+      FD_EPOLL_TIMEOUT_MS: "1"
       CLASSIFIER_PREWARM: "64"
       TP_PREWARM: "64"
       TP_MIN_THREADS: "64"
@@ -52,9 +54,9 @@ services:
       PROFILE_DOMINANT_MIN_COUNT: "15"
       PROFILE_DOMINANT_MAX_OPPOSITE: "2"
       BUCKET_FASTPATH: "0"
-      ASSUME_BODY_COMPLETE: "0"
-      ASSUME_FRAUD_SCORE_PATH: "0"
-      ASSUME_JSON_BODY_START: "0"
+      ASSUME_BODY_COMPLETE: "1"
+      ASSUME_FRAUD_SCORE_PATH: "1"
+      ASSUME_JSON_BODY_START: "1"
       FASTPATH_CANARY_REQUESTS: "0"
       FASTPATH_CANARY_INTERVAL: "0"
       EXACT_FALLBACK: "risky"
@@ -85,7 +87,7 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:361f6196c117f7203ea1c8e0494ae3e5056b84be
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:046225b9a4b4a47089712298d094208b010e0377
     platform: linux/amd64
     entrypoint: ["rinha-fraud", "serve"]
     environment:
@@ -94,6 +96,8 @@ services:
       INDEX_HUGEPAGES: "1"
       SERVER_MODE: raw-async
       FD_RAW: "1"
+      FD_EPOLL: "1"
+      FD_EPOLL_TIMEOUT_MS: "1"
       CLASSIFIER_PREWARM: "64"
       TP_PREWARM: "64"
       TP_MIN_THREADS: "64"
@@ -114,9 +118,9 @@ services:
       PROFILE_DOMINANT_MIN_COUNT: "15"
       PROFILE_DOMINANT_MAX_OPPOSITE: "2"
       BUCKET_FASTPATH: "0"
-      ASSUME_BODY_COMPLETE: "0"
-      ASSUME_FRAUD_SCORE_PATH: "0"
-      ASSUME_JSON_BODY_START: "0"
+      ASSUME_BODY_COMPLETE: "1"
+      ASSUME_FRAUD_SCORE_PATH: "1"
+      ASSUME_JSON_BODY_START: "1"
       FASTPATH_CANARY_REQUESTS: "0"
       FASTPATH_CANARY_INTERVAL: "0"
       EXACT_FALLBACK: "risky"

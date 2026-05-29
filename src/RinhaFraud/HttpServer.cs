@@ -39,6 +39,7 @@ internal static class HttpServer
     private static readonly bool FdControlPrebuffer = EnvBool("FD_CONTROL_PREBUFFER", false);
     private static readonly bool FdDedicatedThreads = EnvBool("FD_DEDICATED_THREADS", false);
     private static readonly bool FdEpoll = EnvBool("FD_EPOLL", false);
+    private static readonly int FdEpollTimeoutMs = EnvInt("FD_EPOLL_TIMEOUT_MS", -1);
     private static readonly bool FdPreRead = EnvBool("FD_PRE_READ", false);
     private static readonly bool TcpQuickAck = EnvBool("TCP_QUICKACK", false);
     private static readonly bool ThreadPoolPreferLocal = EnvBool("TP_PREFER_LOCAL", false);
@@ -655,7 +656,7 @@ internal static class HttpServer
         {
             while (true)
             {
-                var ready = epoll_wait(epollFd, eventsPtr, events.Length, -1);
+                var ready = epoll_wait(epollFd, eventsPtr, events.Length, FdEpollTimeoutMs);
                 if (ready < 0)
                 {
                     if (Marshal.GetLastPInvokeError() == Eintr)

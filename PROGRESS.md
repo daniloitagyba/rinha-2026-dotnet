@@ -7,15 +7,13 @@ summary, not a raw session log.
 
 - Goal: local official k6 `p99 <= 0.50ms`, zero errors, APIs still in `.NET`.
 - Best observed full local result on the `.NET` API line:
-  `p99=0.53ms`, `final_score=6000`, `fp=0`, `fn=0`, `http_errors=0`,
-  `failure_rate=0`, with the experimental bundle plus persisted
-  `lb.sysctls.net.core.somaxconn=65535`.
-  The previous repeated floor was `0.54ms-0.55ms`; the current persisted
-  worktree revalidated at `0.53ms`.
-- The `0.50ms` target is not achieved yet. A stricter pre-remote target of
-  complete local k6 `p99<=0.52ms` has also not been sustained; the new
-  `somaxconn` signal hit `0.52ms` in smoke, but complete 2-minute k6
-  rechecked at `0.53ms`.
+  `p99=0.46ms`, `final_score=6000`, `fp=0`, `fn=0`, `http_errors=0`,
+  `failure_rate=0`, with the reference-gated profile fast path plus
+  `FD_EPOLL=1` and `FD_EPOLL_TIMEOUT_MS=1`.
+  The same bundle was immediately repeated at `p99=0.47ms` and `p99=0.46ms`.
+- The local `0.50ms` / `0.52ms` targets are achieved for the current reference
+  set by that protected experimental bundle. This has not been promoted to the
+  safe default and has not been remote-tested yet.
 
 ## Current Safe Baseline
 
@@ -33,6 +31,9 @@ The current safe default keeps:
 - `lb.sysctls.net.core.somaxconn=65535`
 - `LB_PRECONNECT_CONTROL=1` in fdpass LB, to open backend control channels
   before the first client traffic when possible.
+- Current best local bundle additionally enables `FD_EPOLL=1` and
+  `FD_EPOLL_TIMEOUT_MS=1`; keep this treated as an explicit benchmark/submission
+  setting, not as a generic safe default.
 
 Reason: after the reference/test data changed, aggressive profile fast paths
 created false positives/false negatives remotely. The safe path prioritizes
@@ -138,6 +139,70 @@ Additional final-candidate rechecks after comparing with the current top
 - Rechecking the `.NET` fd event-loop path against the current profile bundle
   did not change the previous rejection: `FD_EPOLL=1` short k6 was `0.55ms`;
   a one-receiver/one-worker variant only matched `0.54ms`.
+- 2026-05-28 follow-up after WSL/Docker idle: protected control smoke matched
+  the floor at `p99=0.53ms`, score `6000`, zero errors. Combining
+  `FD_EPOLL=1`, `FD_RECEIVERS=1`, `LB_FDPASS_NONBLOCK=1`, and
+  `TCP_QUICKACK=1` also only reached `0.53ms`. An external-repo-inspired
+  isolated cpuset/resource layout (`lb=2,3`, `api1=0`, `api2=1`,
+  `lb/api=0.10/0.45`) produced timeouts (`244` HTTP errors,
+  `p99=2001ms`) and is rejected. A `.NET` `FD_EPOLL_GREEDY_READ` experiment,
+  which tried an immediate read after receiving the passed fd, stayed correct
+  but worsened short k6 to `p99=0.54ms`; the code was removed. A follow-up
+  `FD_EPOLL_DEFER_ADD` variant, which delayed epoll registration and handled
+  the received fd immediately, also stayed correct but only reached
+  `p99=0.54ms` in short k6; combining it with `LB_FDPASS_NONBLOCK=1` and
+  `TCP_QUICKACK=1` remained at `0.54ms`, so it was removed too. Adding
+  API-side edge-triggered epoll (`FD_EPOLL_ET=1`) reached `0.52ms` in one
+  short smoke, but the full k6 regressed to `p99=0.54ms`; combining it with
+  LB `EPOLL_ET=1` worsened smoke to `0.54ms`, and leaving default receiver
+  count only reached `0.53ms`. The flag was removed. Replacing the fdpass LB
+  listener `epoll_wait` loop with a poll-based accept loop inspired by C++ LBs
+  stayed correct but only reached `p99=0.53ms` in smoke; it was removed.
+  After fixing the local runner so `LB_PRECONNECT_CONTROL` is emitted when used
+  alone, disabling it (`LB_PRECONNECT_CONTROL=0`) worsened smoke to
+  `p99=0.54ms`; keep the default `1`. Testing the top `.NET` cpuset shape
+  alone (`api1=0`, `api2=1`, `lb=2,3`) while keeping current CPU budgets
+  worsened smoke to `p99=0.55ms`; keep the current local cpusets. ASM-inspired
+  listener `TCP_FASTOPEN=1` did not help because k6 does not appear to benefit
+  from TFO here; smoke was `p99=0.54ms`, and the flag was removed. Rechecking
+  the top `.NET` LB event size with `MAX_EVENTS=256` matched only
+  `p99=0.53ms` in protected smoke. Adding a temporary fdpass accept burst limit
+  of `64`, as used by several external LBs, worsened protected smoke to
+  `p99=0.55ms`; the code was removed. A table-based `.NET` fd epoll variant,
+  using the numeric fd as the epoll token instead of allocating a `GCHandle`
+  per client, reached `p99=0.52ms` in short smoke but regressed to
+  `p99=0.56ms` in the full 2-minute k6. Adding `TCP_QUICKACK=1` to that
+  variant also worsened smoke to `p99=0.56ms`; the code was removed.
+- A full 2-minute k6 recheck of the best protected bundle, after reverting the
+  rejected experiments, returned `p99=0.55ms`, score `6000`, zero FP/FN/HTTP
+  errors. This confirms the current complete-k6 floor is still above the
+  `0.52ms` target.
+- Later on 2026-05-28, the refreshed preview ranking still had the same
+  applicable shape: top `.NET` was `fksegundo/rinha-dotnet` at remote
+  `p99=0.43ms`, with `vinicius-piassa` ASM and `dalvorsn`/`fksegundo` native
+  entries ahead. A fresh full protected recheck of the current publishable
+  bundle, including the default native flags
+  `-DJSON_FIXED_NUMBERS=1 -DKD_BEST_FIRST=1`, returned `p99=0.54ms`, score
+  `6000`, zero FP/FN/HTTP errors. Two quick local probes also failed to
+  improve the floor: `FD_RAW=0` stayed at `p99=0.54ms`, and
+  `LB_CPU=0.13/API_CPU=0.435` worsened to `p99=0.55ms`.
+- Additional top-`.NET` inspired probes were rejected. Limiting the managed
+  fd-epoll control drain to `FD_EPOLL_RECV_BUDGET=32` stayed correct but
+  worsened short k6 to `p99=0.55ms`; the temporary code was removed.
+  Installing `libmimalloc2.0` and setting
+  `LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libmimalloc.so.2`, as a local analogue
+  to the top `.NET` image, stayed at `p99=0.54ms` in short k6 and was removed.
+  Upgrading to `.NET 11 preview` was not pursued because the host currently has
+  only SDK `10.0.101`, and that would break the documented local commands.
+- The missing signal from the top `.NET` event-loop was not the recv-fd budget,
+  but the short epoll timeout. Adding `FD_EPOLL_TIMEOUT_MS` to the managed fd
+  epoll loop and running with `FD_EPOLL=1 FD_EPOLL_TIMEOUT_MS=1` produced a
+  protected short smoke of `p99=0.45ms`, score `6000`, zero errors. Two full
+  2-minute k6 runs then sustained the result: `p99=0.47ms` and `p99=0.46ms`,
+  both with `final_score=6000`, zero FP/FN/HTTP errors. The command included
+  both `PROFILE_FASTPATH_REFERENCE_SHA256` and
+  `EXPECTED_REFERENCES_GZIP_SHA256` for the current references hash
+  `43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67`.
 
 ## Remote History
 

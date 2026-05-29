@@ -115,6 +115,10 @@ Core:
 - `INDEX_PATH=/app/data/references.idx`
 - `KDTREE_NATIVE=1`
 - `FD_RAW=1`
+- `FD_EPOLL=1` can be enabled for the current best local bundle, keeping the API
+  in `.NET` while using a managed epoll loop for accepted fds.
+- `FD_EPOLL_TIMEOUT_MS=1` is the current best local epoll setting; the default
+  remains `-1` unless explicitly set by the benchmark/submission environment.
 - `TP_MIN_THREADS=64`
 - `WORKERS=2`
 - `LB_PRECONNECT_CONTROL=1`
@@ -130,7 +134,7 @@ Experimental/default-off:
 
 - `PROFILE_FASTPATH=1` with strict thresholds
 - `PROFILE_FASTPATH_REFERENCE_SHA256=<current references sha256>`
-- `FD_EPOLL=1`
+- `FD_EPOLL=1` / `FD_EPOLL_TIMEOUT_MS=1`
 - `FD_CONTROL_SEQPACKET=1`
 - `FD_CONTROL_PREBUFFER=1`
 - `FD_PRE_READ=1`

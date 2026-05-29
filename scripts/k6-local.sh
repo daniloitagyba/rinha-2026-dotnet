@@ -179,6 +179,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${FD_DEDICATED_THREADS:-}" ] || \
    [ -n "${FD_THREAD_STACK_KB:-}" ] || \
    [ -n "${FD_EPOLL:-}" ] || \
+   [ -n "${FD_EPOLL_TIMEOUT_MS:-}" ] || \
    [ -n "${TCP_QUICKACK:-}" ] || \
    [ -n "${NATIVE_EPOLL:-}" ] || \
    [ -n "${FD_IMMEDIATE_READ:-}" ] || \
@@ -230,14 +231,14 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
   OVERRIDE_FILE="${OVERRIDE_FILE_PATH:-${TMPDIR:-/tmp}/${PROJECT_NAME}.override.yml}"
   {
     echo "services:"
-    if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ] || [ -n "${LB_CPUSET:-}" ] || [ -n "${FD_CONTROL_SEQPACKET:-}" ] || [ -n "${FD_CONTROL_PREBUFFER:-}" ] || [ -n "${EPOLL_ET:-}" ] || [ -n "${PIN_FIRST_CPU:-}" ] || [ -n "${TCP_DEFER_ACCEPT:-}" ] || [ -n "${LB_FAST2:-}" ] || [ -n "${LB_SOCKET_BUFFERS:-}" ] || [ -n "${LB_TCP_NODELAY:-}" ] || [ -n "${SOCKET_BUFFER_SIZE:-}" ] || [ -n "${SOCKETS_MOUNT:-}" ] || [ -n "${LOGGING_NONE:-}" ]; then
+    if [ -n "${LB_CPU:-}" ] || [ -n "${LB_MEMORY:-}" ] || [ -n "${LB_CPUSET:-}" ] || [ -n "${FD_CONTROL_SEQPACKET:-}" ] || [ -n "${FD_CONTROL_PREBUFFER:-}" ] || [ -n "${EPOLL_ET:-}" ] || [ -n "${PIN_FIRST_CPU:-}" ] || [ -n "${TCP_DEFER_ACCEPT:-}" ] || [ -n "${LB_FAST2:-}" ] || [ -n "${LB_PRECONNECT_CONTROL:-}" ] || [ -n "${LB_SOCKET_BUFFERS:-}" ] || [ -n "${LB_TCP_NODELAY:-}" ] || [ -n "${SOCKET_BUFFER_SIZE:-}" ] || [ -n "${SOCKETS_MOUNT:-}" ] || [ -n "${LOGGING_NONE:-}" ]; then
       echo "  lb:"
       [ -n "${LB_CPUSET:-}" ] && echo "    cpuset: \"$LB_CPUSET\""
       if [ -n "${SOCKETS_MOUNT:-}" ]; then
         echo "    volumes:"
         echo "      - ${SOCKETS_MOUNT}"
       fi
-      if [ -n "${FD_CONTROL_SEQPACKET:-}" ] || [ -n "${FD_CONTROL_PREBUFFER:-}" ] || [ -n "${EPOLL_ET:-}" ] || [ -n "${PIN_FIRST_CPU:-}" ] || [ -n "${TCP_DEFER_ACCEPT:-}" ] || [ -n "${LB_FAST2:-}" ] || [ -n "${LB_SOCKET_BUFFERS:-}" ] || [ -n "${LB_TCP_NODELAY:-}" ] || [ -n "${SOCKET_BUFFER_SIZE:-}" ]; then
+      if [ -n "${FD_CONTROL_SEQPACKET:-}" ] || [ -n "${FD_CONTROL_PREBUFFER:-}" ] || [ -n "${EPOLL_ET:-}" ] || [ -n "${PIN_FIRST_CPU:-}" ] || [ -n "${TCP_DEFER_ACCEPT:-}" ] || [ -n "${LB_FAST2:-}" ] || [ -n "${LB_PRECONNECT_CONTROL:-}" ] || [ -n "${LB_SOCKET_BUFFERS:-}" ] || [ -n "${LB_TCP_NODELAY:-}" ] || [ -n "${SOCKET_BUFFER_SIZE:-}" ]; then
         echo "    environment:"
         [ -n "${FD_CONTROL_SEQPACKET:-}" ] && echo "      FD_CONTROL_SEQPACKET: \"$FD_CONTROL_SEQPACKET\""
         [ -n "${FD_CONTROL_PREBUFFER:-}" ] && echo "      FD_CONTROL_PREBUFFER: \"$FD_CONTROL_PREBUFFER\""
@@ -334,6 +335,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${FD_DEDICATED_THREADS:-}" ] && echo "      FD_DEDICATED_THREADS: \"$FD_DEDICATED_THREADS\""
       [ -n "${FD_THREAD_STACK_KB:-}" ] && echo "      FD_THREAD_STACK_KB: \"$FD_THREAD_STACK_KB\""
       [ -n "${FD_EPOLL:-}" ] && echo "      FD_EPOLL: \"$FD_EPOLL\""
+      [ -n "${FD_EPOLL_TIMEOUT_MS:-}" ] && echo "      FD_EPOLL_TIMEOUT_MS: \"$FD_EPOLL_TIMEOUT_MS\""
       [ -n "${TCP_QUICKACK:-}" ] && echo "      TCP_QUICKACK: \"$TCP_QUICKACK\""
       [ -n "${NATIVE_EPOLL:-}" ] && echo "      NATIVE_EPOLL: \"$NATIVE_EPOLL\""
       [ -n "${FD_IMMEDIATE_READ:-}" ] && echo "      FD_IMMEDIATE_READ: \"$FD_IMMEDIATE_READ\""

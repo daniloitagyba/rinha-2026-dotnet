@@ -53,6 +53,8 @@ param(
     [string]$SocketsMount = $env:SOCKETS_MOUNT,
     [string]$Workers = $env:WORKERS,
     [string]$FdRaw = $env:FD_RAW,
+    [string]$FdEpoll = $env:FD_EPOLL,
+    [string]$FdEpollTimeoutMs = $env:FD_EPOLL_TIMEOUT_MS,
     [string]$FdPreRead = $env:FD_PRE_READ,
     [string]$AssumeBodyComplete = $env:ASSUME_BODY_COMPLETE,
     [string]$AssumeFraudScorePath = $env:ASSUME_FRAUD_SCORE_PATH,
@@ -199,6 +201,8 @@ $apiOverrides = [ordered]@{
     "BLOCK_SCAN" = $BlockScan
     "WORKERS" = $Workers
     "FD_RAW" = $FdRaw
+    "FD_EPOLL" = $FdEpoll
+    "FD_EPOLL_TIMEOUT_MS" = $FdEpollTimeoutMs
     "FD_PRE_READ" = $FdPreRead
     "ASSUME_BODY_COMPLETE" = $AssumeBodyComplete
     "ASSUME_FRAUD_SCORE_PATH" = $AssumeFraudScorePath

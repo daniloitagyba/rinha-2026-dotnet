@@ -128,7 +128,7 @@ EOF
 
 if [ "$UPDATE_STATE" = "1" ]; then
   cat > "$STATE_PATH" <<EOF
-# Last official reference dataset validated by the scheduled refresh pipeline.
+# Last official reference dataset validated by the manual reference refresh.
 RINHA_REF=$RINHA_REF
 REFERENCES_GZIP_SHA256=$refs_sha
 TEST_DATA_SHA256=$test_sha

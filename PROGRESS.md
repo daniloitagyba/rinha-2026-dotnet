@@ -559,8 +559,8 @@ for changed references.
   latency and remained correct in k6, but the full-k6 gain is dominated by
   network/transport.
 - `PROFILE_FASTPATH=0` as the safe default after reference changes.
-- Automated reference refresh workflow that rebuilds the index and validates
-  before publishing a candidate image.
+- Manual reference refresh gate that rebuilds the index and validates before
+  publishing a candidate image.
 - Embedded reference fingerprints in `references.idx`, plus runtime guards
   (`EXPECTED_REFERENCES_*` and `PROFILE_FASTPATH_REFERENCE_SHA256`) so
   dataset-sensitive fast paths only run against an explicitly validated

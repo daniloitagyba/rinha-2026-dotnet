@@ -1,6 +1,6 @@
 services:
   lb:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:046225b9a4b4a47089712298d094208b010e0377
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:65d63900ec49a2b53c02fdd07007499d121437cd
     platform: linux/amd64
     entrypoint: ["rinha-lb"]
     environment:
@@ -23,7 +23,7 @@ services:
           memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:046225b9a4b4a47089712298d094208b010e0377
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:65d63900ec49a2b53c02fdd07007499d121437cd
     platform: linux/amd64
     entrypoint: ["rinha-fraud", "serve"]
     environment:
@@ -34,6 +34,7 @@ services:
       FD_RAW: "1"
       FD_EPOLL: "1"
       FD_EPOLL_TIMEOUT_MS: "1"
+      FD_EPOLL_TIMEOUT_US: "200"
       CLASSIFIER_PREWARM: "64"
       TP_PREWARM: "64"
       TP_MIN_THREADS: "64"
@@ -87,7 +88,7 @@ services:
           memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:046225b9a4b4a47089712298d094208b010e0377
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:65d63900ec49a2b53c02fdd07007499d121437cd
     platform: linux/amd64
     entrypoint: ["rinha-fraud", "serve"]
     environment:
@@ -98,6 +99,7 @@ services:
       FD_RAW: "1"
       FD_EPOLL: "1"
       FD_EPOLL_TIMEOUT_MS: "1"
+      FD_EPOLL_TIMEOUT_US: "200"
       CLASSIFIER_PREWARM: "64"
       TP_PREWARM: "64"
       TP_MIN_THREADS: "64"

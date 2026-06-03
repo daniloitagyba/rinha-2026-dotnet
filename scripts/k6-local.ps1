@@ -49,12 +49,18 @@ param(
     [string]$NativeAnn = $env:NATIVE_ANN,
     [string]$NativeAnnDirect = $env:NATIVE_ANN_DIRECT,
     [string]$KdTreeMaxPartitions = $env:KDTREE_MAX_PARTITIONS,
+    [string]$KdTreeBlockScan = $env:KDTREE_BLOCK_SCAN,
     [string]$BlockScan = $env:BLOCK_SCAN,
     [string]$SocketsMount = $env:SOCKETS_MOUNT,
     [string]$Workers = $env:WORKERS,
     [string]$FdRaw = $env:FD_RAW,
     [string]$FdEpoll = $env:FD_EPOLL,
+    [string]$FdEpollSlab = $env:FD_EPOLL_SLAB,
+    [string]$FdEpollSlabClients = $env:FD_EPOLL_SLAB_CLIENTS,
+    [string]$FdEpollSlabControls = $env:FD_EPOLL_SLAB_CONTROLS,
     [string]$FdEpollTimeoutMs = $env:FD_EPOLL_TIMEOUT_MS,
+    [string]$FdEpollTimeoutUs = $env:FD_EPOLL_TIMEOUT_US,
+    [string]$FdEpollSpinUs = $env:FD_EPOLL_SPIN_US,
     [string]$FdPreRead = $env:FD_PRE_READ,
     [string]$AssumeBodyComplete = $env:ASSUME_BODY_COMPLETE,
     [string]$AssumeFraudScorePath = $env:ASSUME_FRAUD_SCORE_PATH,
@@ -63,6 +69,7 @@ param(
     [string]$FastPathCanaryInterval = $env:FASTPATH_CANARY_INTERVAL,
     [string]$ServerMode = $env:SERVER_MODE,
     [string]$IndexHugePages = $env:INDEX_HUGEPAGES,
+    [string]$MlockCurrent = $env:MLOCK_CURRENT,
     [string]$DotnetProcessorCount = $env:DOTNET_PROCESSOR_COUNT,
     [string]$DotnetGCHeapCount = $env:DOTNET_GCHeapCount,
     [string]$DotnetThreadPoolUnfairSemaphoreSpinLimit = $env:DOTNET_ThreadPool_UnfairSemaphoreSpinLimit,
@@ -198,11 +205,17 @@ $apiOverrides = [ordered]@{
     "NATIVE_ANN" = $NativeAnn
     "NATIVE_ANN_DIRECT" = $NativeAnnDirect
     "KDTREE_MAX_PARTITIONS" = $KdTreeMaxPartitions
+    "KDTREE_BLOCK_SCAN" = $KdTreeBlockScan
     "BLOCK_SCAN" = $BlockScan
     "WORKERS" = $Workers
     "FD_RAW" = $FdRaw
     "FD_EPOLL" = $FdEpoll
+    "FD_EPOLL_SLAB" = $FdEpollSlab
+    "FD_EPOLL_SLAB_CLIENTS" = $FdEpollSlabClients
+    "FD_EPOLL_SLAB_CONTROLS" = $FdEpollSlabControls
     "FD_EPOLL_TIMEOUT_MS" = $FdEpollTimeoutMs
+    "FD_EPOLL_TIMEOUT_US" = $FdEpollTimeoutUs
+    "FD_EPOLL_SPIN_US" = $FdEpollSpinUs
     "FD_PRE_READ" = $FdPreRead
     "ASSUME_BODY_COMPLETE" = $AssumeBodyComplete
     "ASSUME_FRAUD_SCORE_PATH" = $AssumeFraudScorePath
@@ -211,6 +224,7 @@ $apiOverrides = [ordered]@{
     "FASTPATH_CANARY_INTERVAL" = $FastPathCanaryInterval
     "SERVER_MODE" = $ServerMode
     "INDEX_HUGEPAGES" = $IndexHugePages
+    "MLOCK_CURRENT" = $MlockCurrent
     "DOTNET_PROCESSOR_COUNT" = $DotnetProcessorCount
     "DOTNET_GCHeapCount" = $DotnetGCHeapCount
     "DOTNET_ThreadPool_UnfairSemaphoreSpinLimit" = $DotnetThreadPoolUnfairSemaphoreSpinLimit
@@ -396,6 +410,8 @@ try {
     }
 
     $mount = "${testDir}:/scripts"
+    $resultsPath = Join-Path $testDir "results.json"
+    Remove-Item -Path $resultsPath -ErrorAction SilentlyContinue
     $dockerArgs = @(
         "run", "--rm",
         "--network", "${ProjectName}_default",
@@ -414,6 +430,9 @@ try {
     )
 
     & docker @dockerArgs
+    if (-not (Test-Path $resultsPath) -or (Get-Item $resultsPath).Length -le 0) {
+        throw "k6 did not write $resultsPath; set a writable test mount and rerun"
+    }
 } finally {
     if (-not $KeepServices) {
         try {

@@ -12,6 +12,8 @@ Services:
 - `lb`: C TCP load balancer, entrypoint `rinha-lb`.
 - `api1`: `.NET` API, entrypoint `rinha-fraud serve`.
 - `api2`: `.NET` API, entrypoint `rinha-fraud serve`.
+- Compose networking must remain Docker bridge/default. Do not use host
+  networking, `network_mode: "none"` or privileged containers.
 
 Request flow:
 
@@ -138,7 +140,6 @@ Experimental/default-off:
 - `FD_CONTROL_SEQPACKET=1`
 - `FD_CONTROL_PREBUFFER=1`
 - `FD_PRE_READ=1`
-- `TCP_QUICKACK=1`
 - `BUCKET_FASTPATH=1`
 - `FASTPATH_CANARY_REQUESTS`
 - `FASTPATH_CANARY_INTERVAL`
@@ -153,6 +154,8 @@ Experimental/default-off:
 - Native C can accelerate search through P/Invoke, but classification ownership
   remains in the API process.
 - LB remains transport-only.
+- Compose remains on Docker bridge/default networking; host networking,
+  `network_mode: none` and `privileged: true` are not allowed.
 - Official payloads must not become lookup keys.
 - `PROFILE_FASTPATH` must be treated as dataset-sensitive.
 - `validate-local` is the gate before publication or remote testing.

@@ -54,12 +54,8 @@ case "$K6_NETWORK_MODE" in
     K6_DOCKER_NETWORK="${PROJECT_NAME}_default"
     K6_DEFAULT_BASE_URL="http://lb:9999"
     ;;
-  host)
-    K6_DOCKER_NETWORK="host"
-    K6_DEFAULT_BASE_URL="http://localhost:9999"
-    ;;
   *)
-    echo "K6_NETWORK_MODE must be bridge or host" >&2
+    echo "K6_NETWORK_MODE must be bridge for this project" >&2
     exit 2
     ;;
 esac
@@ -169,6 +165,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${NATIVE_ANN:-}" ] || \
    [ -n "${NATIVE_ANN_DIRECT:-}" ] || \
    [ -n "${KDTREE_MAX_PARTITIONS:-}" ] || \
+   [ -n "${KDTREE_BLOCK_SCAN:-}" ] || \
    [ -n "${BLOCK_SCAN:-}" ] || \
    [ -n "${SOCKETS_MOUNT:-}" ] || \
    [ -n "${API_ENTRYPOINT:-}" ] || \
@@ -179,15 +176,19 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${FD_DEDICATED_THREADS:-}" ] || \
    [ -n "${FD_THREAD_STACK_KB:-}" ] || \
    [ -n "${FD_EPOLL:-}" ] || \
+   [ -n "${FD_EPOLL_SLAB:-}" ] || \
+   [ -n "${FD_EPOLL_SLAB_CLIENTS:-}" ] || \
+   [ -n "${FD_EPOLL_SLAB_CONTROLS:-}" ] || \
    [ -n "${FD_EPOLL_TIMEOUT_MS:-}" ] || \
-   [ -n "${TCP_QUICKACK:-}" ] || \
+   [ -n "${FD_EPOLL_TIMEOUT_US:-}" ] || \
+   [ -n "${FD_EPOLL_SPIN_US:-}" ] || \
    [ -n "${NATIVE_EPOLL:-}" ] || \
    [ -n "${FD_IMMEDIATE_READ:-}" ] || \
    [ -n "${FD_PRE_READ:-}" ] || \
-    [ -n "${ASSUME_BODY_COMPLETE:-}" ] || \
-    [ -n "${ASSUME_FRAUD_SCORE_PATH:-}" ] || \
-    [ -n "${ASSUME_JSON_BODY_START:-}" ] || \
-    [ -n "${FASTPATH_CANARY_REQUESTS:-}" ] || \
+   [ -n "${ASSUME_BODY_COMPLETE:-}" ] || \
+   [ -n "${ASSUME_FRAUD_SCORE_PATH:-}" ] || \
+   [ -n "${ASSUME_JSON_BODY_START:-}" ] || \
+   [ -n "${FASTPATH_CANARY_REQUESTS:-}" ] || \
     [ -n "${FASTPATH_CANARY_INTERVAL:-}" ] || \
     [ -n "${EPOLL_ET:-}" ] || \
    [ -n "${PIN_FIRST_CPU:-}" ] || \
@@ -201,6 +202,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${REFERENCE_FASTPATH_FRAUD_MIN_COUNT:-}" ] || \
    [ -n "${SERVER_MODE:-}" ] || \
    [ -n "${INDEX_HUGEPAGES:-}" ] || \
+   [ -n "${MLOCK_CURRENT:-}" ] || \
    [ -n "${MALLOC_ARENA_MAX:-}" ] || \
    [ -n "${DOTNET_PROCESSOR_COUNT:-}" ] || \
    [ -n "${DOTNET_GCHeapCount:-}" ] || \
@@ -327,6 +329,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${NATIVE_ANN:-}" ] && echo "      NATIVE_ANN: \"$NATIVE_ANN\""
       [ -n "${NATIVE_ANN_DIRECT:-}" ] && echo "      NATIVE_ANN_DIRECT: \"$NATIVE_ANN_DIRECT\""
       [ -n "${KDTREE_MAX_PARTITIONS:-}" ] && echo "      KDTREE_MAX_PARTITIONS: \"$KDTREE_MAX_PARTITIONS\""
+      [ -n "${KDTREE_BLOCK_SCAN:-}" ] && echo "      KDTREE_BLOCK_SCAN: \"$KDTREE_BLOCK_SCAN\""
       [ -n "${BLOCK_SCAN:-}" ] && echo "      BLOCK_SCAN: \"$BLOCK_SCAN\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
       [ -n "${NATIVE_WORKERS:-}" ] && echo "      NATIVE_WORKERS: \"$NATIVE_WORKERS\""
@@ -335,8 +338,12 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${FD_DEDICATED_THREADS:-}" ] && echo "      FD_DEDICATED_THREADS: \"$FD_DEDICATED_THREADS\""
       [ -n "${FD_THREAD_STACK_KB:-}" ] && echo "      FD_THREAD_STACK_KB: \"$FD_THREAD_STACK_KB\""
       [ -n "${FD_EPOLL:-}" ] && echo "      FD_EPOLL: \"$FD_EPOLL\""
+      [ -n "${FD_EPOLL_SLAB:-}" ] && echo "      FD_EPOLL_SLAB: \"$FD_EPOLL_SLAB\""
+      [ -n "${FD_EPOLL_SLAB_CLIENTS:-}" ] && echo "      FD_EPOLL_SLAB_CLIENTS: \"$FD_EPOLL_SLAB_CLIENTS\""
+      [ -n "${FD_EPOLL_SLAB_CONTROLS:-}" ] && echo "      FD_EPOLL_SLAB_CONTROLS: \"$FD_EPOLL_SLAB_CONTROLS\""
       [ -n "${FD_EPOLL_TIMEOUT_MS:-}" ] && echo "      FD_EPOLL_TIMEOUT_MS: \"$FD_EPOLL_TIMEOUT_MS\""
-      [ -n "${TCP_QUICKACK:-}" ] && echo "      TCP_QUICKACK: \"$TCP_QUICKACK\""
+      [ -n "${FD_EPOLL_TIMEOUT_US:-}" ] && echo "      FD_EPOLL_TIMEOUT_US: \"$FD_EPOLL_TIMEOUT_US\""
+      [ -n "${FD_EPOLL_SPIN_US:-}" ] && echo "      FD_EPOLL_SPIN_US: \"$FD_EPOLL_SPIN_US\""
       [ -n "${NATIVE_EPOLL:-}" ] && echo "      NATIVE_EPOLL: \"$NATIVE_EPOLL\""
       [ -n "${FD_IMMEDIATE_READ:-}" ] && echo "      FD_IMMEDIATE_READ: \"$FD_IMMEDIATE_READ\""
       [ -n "${FD_PRE_READ:-}" ] && echo "      FD_PRE_READ: \"$FD_PRE_READ\""
@@ -353,6 +360,7 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${REFERENCE_FASTPATH_FRAUD_MIN_COUNT:-}" ] && echo "      REFERENCE_FASTPATH_FRAUD_MIN_COUNT: \"$REFERENCE_FASTPATH_FRAUD_MIN_COUNT\""
       [ -n "${SERVER_MODE:-}" ] && echo "      SERVER_MODE: \"$SERVER_MODE\""
       [ -n "${INDEX_HUGEPAGES:-}" ] && echo "      INDEX_HUGEPAGES: \"$INDEX_HUGEPAGES\""
+      [ -n "${MLOCK_CURRENT:-}" ] && echo "      MLOCK_CURRENT: \"$MLOCK_CURRENT\""
       [ -n "${MALLOC_ARENA_MAX:-}" ] && echo "      MALLOC_ARENA_MAX: \"$MALLOC_ARENA_MAX\""
       [ -n "${DOTNET_PROCESSOR_COUNT:-}" ] && echo "      DOTNET_PROCESSOR_COUNT: \"$DOTNET_PROCESSOR_COUNT\""
       [ -n "${DOTNET_GCHeapCount:-}" ] && echo "      DOTNET_GCHeapCount: \"$DOTNET_GCHeapCount\""
@@ -434,6 +442,7 @@ if [ "${PERF_STAT:-0}" = "1" ] && command -v perf >/dev/null 2>&1; then
   fi
 fi
 
+rm -f "$TEST_MOUNT/results.json"
 docker run --rm \
   --network "$K6_DOCKER_NETWORK" \
   -e K6_NO_USAGE_REPORT=true \
@@ -449,6 +458,11 @@ docker run --rm \
   -e PAYLOAD_VARIANT \
   -v "$TEST_MOUNT:/scripts" \
   "$K6_IMAGE" run /scripts/rinha-test.js
+
+if [ ! -s "$TEST_MOUNT/results.json" ]; then
+  echo "k6 did not write $TEST_MOUNT/results.json; set TEST_MOUNT to a writable path and rerun" >&2
+  exit 1
+fi
 
 if [ -n "$PERF_PID" ]; then
   wait "$PERF_PID" || true

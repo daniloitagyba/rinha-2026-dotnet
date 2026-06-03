@@ -49,6 +49,7 @@ internal static class BinaryIndexBuilder
     private const uint SectionKdLabels = 19;
     private const uint SectionKdIds = 20;
     private const uint SectionBuildInfo = 21;
+    private const uint SectionKdBlockVectors = 22;
 
     public static void Build(string outputPath, Stream input)
     {
@@ -166,7 +167,7 @@ internal static class BinaryIndexBuilder
         bool nativeOnly,
         string referencesJsonSha256)
     {
-        var sections = new List<SectionEntry>(17);
+        var sections = new List<SectionEntry>(18);
         WriteProfileSections(output, vectors, labels, orderedOriginalIds, sections);
         WriteNeighborOrdersSection(output, sections);
         if (!nativeOnly)
@@ -577,6 +578,28 @@ internal static class BinaryIndexBuilder
         WriteSection(output, SectionKdVectors, MemoryMarshal.AsBytes(CollectionsMarshal.AsSpan(kdVectors)), sections);
         WriteSection(output, SectionKdLabels, CollectionsMarshal.AsSpan(kdLabels), sections);
         WriteSection(output, SectionKdIds, MemoryMarshal.AsBytes(CollectionsMarshal.AsSpan(kdIds)), sections);
+        if (EnvBool("BUILD_KDTREE_BLOCK_INDEX", false))
+        {
+            WriteSection(output, SectionKdBlockVectors, MemoryMarshal.AsBytes(BuildKdBlockVectors(kdVectors, kdLabels.Count).AsSpan()), sections);
+        }
+    }
+
+    private static short[] BuildKdBlockVectors(List<short> kdVectors, int count)
+    {
+        var blockCount = (count + BlockLaneCount - 1) / BlockLaneCount;
+        var blocks = new short[blockCount * BlockVectorStride];
+        for (var pos = 0; pos < count; pos++)
+        {
+            var lane = pos & (BlockLaneCount - 1);
+            var sourceBase = pos * KdVectorStride;
+            var blockBase = (pos / BlockLaneCount) * BlockVectorStride;
+            for (var dim = 0; dim < Constants.Dim; dim++)
+            {
+                blocks[blockBase + (dim / 2) * BlockLaneCount * 2 + lane * 2 + (dim & 1)] = kdVectors[sourceBase + dim];
+            }
+        }
+
+        return blocks;
     }
 
     private static int BuildKdNode(

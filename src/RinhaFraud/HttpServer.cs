@@ -2,6 +2,7 @@ namespace RinhaFraud;
 
 using System;
 using System.Buffers;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -39,14 +40,26 @@ internal static class HttpServer
     private static readonly bool FdControlPrebuffer = EnvBool("FD_CONTROL_PREBUFFER", false);
     private static readonly bool FdDedicatedThreads = EnvBool("FD_DEDICATED_THREADS", false);
     private static readonly bool FdEpoll = EnvBool("FD_EPOLL", false);
+    private static readonly bool FdEpollSlab = EnvBool("FD_EPOLL_SLAB", false);
+    private static readonly int FdEpollSlabClients = Math.Max(64, EnvInt("FD_EPOLL_SLAB_CLIENTS", 512));
+    private static readonly int FdEpollSlabControls = Math.Max(2, EnvInt("FD_EPOLL_SLAB_CONTROLS", 8));
     private static readonly int FdEpollTimeoutMs = EnvInt("FD_EPOLL_TIMEOUT_MS", -1);
+    private static readonly int FdEpollTimeoutUs = EnvInt("FD_EPOLL_TIMEOUT_US", 0);
+    private static readonly int FdEpollSpinUs = Math.Max(0, EnvInt("FD_EPOLL_SPIN_US", 0));
+    private static readonly long FdEpollSpinTicks = FdEpollSpinUs <= 0
+        ? 0
+        : Math.Max(1, (long)FdEpollSpinUs * Stopwatch.Frequency / 1_000_000);
     private static readonly bool FdPreRead = EnvBool("FD_PRE_READ", false);
-    private static readonly bool TcpQuickAck = EnvBool("TCP_QUICKACK", false);
     private static readonly bool ThreadPoolPreferLocal = EnvBool("TP_PREFER_LOCAL", false);
     private static readonly int FastPathCanaryRequests = Math.Max(0, EnvInt("FASTPATH_CANARY_REQUESTS", 0));
     private static readonly int FastPathCanaryInterval = Math.Max(0, EnvInt("FASTPATH_CANARY_INTERVAL", 0));
     private static long fastPathCanarySeen;
     private static int fastPathsDisabled;
+    private static int epollPwait2Disabled;
+    private const ulong FdEpollSlabListenerToken = ulong.MaxValue;
+    private const ulong FdEpollSlabControlTag = 1UL << 63;
+    private const ulong FdEpollSlabClientTag = 1UL << 62;
+    private const ulong FdEpollSlabIndexMask = 0xFFFF_FFFFUL;
 
     public static void Serve()
     {
@@ -80,6 +93,14 @@ internal static class HttpServer
         {
             var checksum = index.Prefault();
             Console.Error.WriteLine($"prefetched index pages, checksum={checksum}");
+        }
+
+        if (EnvBool("MLOCK_CURRENT", false))
+        {
+            var rc = mlockall(MclCurrent);
+            Console.Error.WriteLine(rc == 0
+                ? "mlockall current pages ok"
+                : $"mlockall current pages failed errno={Marshal.GetLastPInvokeError()}");
         }
 
         var configuredMinThreads = ApplyThreadPoolTuning(minThreads, minIoThreads, maxThreads, maxIoThreads);
@@ -359,14 +380,24 @@ internal static class HttpServer
         var receiverCount = Math.Max(1, EnvInt("FD_RECEIVERS", workerCount));
         var rawFd = EnvBool("FD_RAW", false);
         Console.Error.WriteLine(
-            $"serving fd control on {controlPath}, receivers={receiverCount}, raw_fd={rawFd}, fd_epoll={FdEpoll}, fd_dedicated_threads={FdDedicatedThreads}, index={Environment.GetEnvironmentVariable("INDEX_PATH")}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, risky_fallback_refs={index.RiskyFallbackCount}");
+            $"serving fd control on {controlPath}, receivers={receiverCount}, raw_fd={rawFd}, fd_epoll={FdEpoll}, fd_epoll_slab={FdEpollSlab}, fd_epoll_timeout_ms={FdEpollTimeoutMs}, fd_epoll_timeout_us={FdEpollTimeoutUs}, fd_epoll_spin_us={FdEpollSpinUs}, fd_dedicated_threads={FdDedicatedThreads}, index={Environment.GetEnvironmentVariable("INDEX_PATH")}, keep_alive_requests={keepAliveRequests}, keep_alive_idle_ms={keepAliveIdleMs}, risky_fallback_refs={index.RiskyFallbackCount}");
 
         using var listener = CreateUnixListener(controlPath);
         if (rawFd && FdEpoll)
         {
             for (var i = 0; i < receiverCount; i++)
             {
-                var thread = new Thread(() => RunFdEpollLoop(listener, index, searchParams, keepAliveRequests))
+                var thread = new Thread(() =>
+                    {
+                        if (FdEpollSlab)
+                        {
+                            RunFdEpollSlabLoop(listener, index, searchParams, keepAliveRequests);
+                        }
+                        else
+                        {
+                            RunFdEpollLoop(listener, index, searchParams, keepAliveRequests);
+                        }
+                    })
                 {
                     IsBackground = false,
                     Name = $"rinha-fd-epoll-{i}"
@@ -488,8 +519,6 @@ internal static class HttpServer
             try
             {
                 socket = new Socket(new SafeSocketHandle((IntPtr)fd, ownsHandle: true));
-                socket.Blocking = true;
-                ConfigureAcceptedSocket(socket, keepAliveIdleMs);
                 ThreadPool.UnsafeQueueUserWorkItem(
                     static (ConnectionWork work) =>
                     {
@@ -581,11 +610,6 @@ internal static class HttpServer
 
     private static void HandleConnection(int fd, BinaryIndex index, SearchParams searchParams, int keepAliveRequests, byte[]? initialBuffer = null, int initialLength = 0)
     {
-        if (TcpQuickAck)
-        {
-            TrySetTcpQuickAck(fd);
-        }
-
         var buffer = initialBuffer ?? ArrayPool<byte>.Shared.Rent(Constants.MaxRequestBytes);
         try
         {
@@ -656,7 +680,7 @@ internal static class HttpServer
         {
             while (true)
             {
-                var ready = epoll_wait(epollFd, eventsPtr, events.Length, FdEpollTimeoutMs);
+                var ready = EpollWait(epollFd, eventsPtr, events.Length);
                 if (ready < 0)
                 {
                     if (Marshal.GetLastPInvokeError() == Eintr)
@@ -704,6 +728,368 @@ internal static class HttpServer
         }
 
         CloseFd(epollFd);
+    }
+
+    private static unsafe void RunFdEpollSlabLoop(Socket listener, BinaryIndex index, SearchParams searchParams, int keepAliveRequests)
+    {
+        var listenerFd = (int)listener.SafeHandle.DangerousGetHandle();
+        SetNonBlocking(listenerFd);
+
+        var epollFd = epoll_create1(EpollCloexec);
+        if (epollFd < 0)
+        {
+            Console.Error.WriteLine($"epoll_create1 failed errno={Marshal.GetLastPInvokeError()}");
+            return;
+        }
+
+        if (EpollAddRaw(epollFd, listenerFd, FdEpollSlabListenerToken) < 0)
+        {
+            Console.Error.WriteLine($"epoll slab add listener failed errno={Marshal.GetLastPInvokeError()}");
+            CloseFd(epollFd);
+            return;
+        }
+
+        var controlFds = new int[FdEpollSlabControls];
+        var clientFds = new int[FdEpollSlabClients];
+        var usedBytes = new int[FdEpollSlabClients];
+        var handledRequests = new int[FdEpollSlabClients];
+        var freeControls = new int[FdEpollSlabControls];
+        var freeClients = new int[FdEpollSlabClients];
+        Array.Fill(controlFds, -1);
+        Array.Fill(clientFds, -1);
+        var freeControlCount = InitializeFreeSlots(freeControls);
+        var freeClientCount = InitializeFreeSlots(freeClients);
+        var bufferBytes = checked((nint)(FdEpollSlabClients * Constants.MaxRequestBytes));
+        var bufferBase = Marshal.AllocHGlobal(bufferBytes);
+
+        Console.Error.WriteLine(
+            $"fd epoll slab enabled controls={FdEpollSlabControls}, clients={FdEpollSlabClients}, buffer_bytes={bufferBytes}");
+
+        try
+        {
+            Span<EpollEvent> events = stackalloc EpollEvent[128];
+            fixed (EpollEvent* eventsPtr = events)
+            {
+                while (true)
+                {
+                    var ready = EpollWait(epollFd, eventsPtr, events.Length);
+                    if (ready < 0)
+                    {
+                        if (Marshal.GetLastPInvokeError() == Eintr)
+                        {
+                            continue;
+                        }
+
+                        Console.Error.WriteLine($"epoll slab wait failed errno={Marshal.GetLastPInvokeError()}");
+                        break;
+                    }
+
+                    for (var i = 0; i < ready; i++)
+                    {
+                        var token = (ulong)events[i].Data;
+                        if (token == FdEpollSlabListenerToken)
+                        {
+                            AcceptFdEpollSlabControls(epollFd, listenerFd, controlFds, freeControls, ref freeControlCount);
+                            continue;
+                        }
+
+                        if ((token & FdEpollSlabControlTag) != 0)
+                        {
+                            var slot = (int)(token & FdEpollSlabIndexMask);
+                            if ((uint)slot >= (uint)controlFds.Length || controlFds[slot] < 0)
+                            {
+                                continue;
+                            }
+
+                            if ((events[i].Events & (EpollErr | EpollHup | EpollRdHup)) != 0)
+                            {
+                                CloseFdEpollSlabControl(epollFd, slot, controlFds, freeControls, ref freeControlCount);
+                            }
+                            else
+                            {
+                                ReceiveFdEpollSlabClients(
+                                    epollFd,
+                                    controlFds[slot],
+                                    clientFds,
+                                    usedBytes,
+                                    handledRequests,
+                                    freeClients,
+                                    ref freeClientCount,
+                                    bufferBase);
+                            }
+
+                            continue;
+                        }
+
+                        if ((token & FdEpollSlabClientTag) != 0)
+                        {
+                            var slot = (int)(token & FdEpollSlabIndexMask);
+                            if ((uint)slot >= (uint)clientFds.Length || clientFds[slot] < 0)
+                            {
+                                continue;
+                            }
+
+                            if ((events[i].Events & (EpollErr | EpollHup)) != 0)
+                            {
+                                CloseFdEpollSlabClient(epollFd, slot, clientFds, usedBytes, handledRequests, freeClients, ref freeClientCount);
+                            }
+                            else
+                            {
+                                HandleFdEpollSlabClient(
+                                    epollFd,
+                                    slot,
+                                    clientFds,
+                                    usedBytes,
+                                    handledRequests,
+                                    freeClients,
+                                    ref freeClientCount,
+                                    bufferBase,
+                                    index,
+                                    searchParams,
+                                    keepAliveRequests);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        finally
+        {
+            for (var i = 0; i < controlFds.Length; i++)
+            {
+                if (controlFds[i] >= 0)
+                {
+                    CloseFd(controlFds[i]);
+                }
+            }
+
+            for (var i = 0; i < clientFds.Length; i++)
+            {
+                if (clientFds[i] >= 0)
+                {
+                    CloseFd(clientFds[i]);
+                }
+            }
+
+            Marshal.FreeHGlobal(bufferBase);
+            CloseFd(epollFd);
+        }
+    }
+
+    private static int InitializeFreeSlots(int[] freeSlots)
+    {
+        for (var i = 0; i < freeSlots.Length; i++)
+        {
+            freeSlots[i] = freeSlots.Length - 1 - i;
+        }
+
+        return freeSlots.Length;
+    }
+
+    private static bool TryRentSlot(int[] freeSlots, ref int freeCount, out int slot)
+    {
+        if (freeCount <= 0)
+        {
+            slot = -1;
+            return false;
+        }
+
+        slot = freeSlots[--freeCount];
+        return true;
+    }
+
+    private static void ReturnSlot(int[] freeSlots, ref int freeCount, int slot)
+    {
+        if ((uint)slot < (uint)freeSlots.Length && freeCount < freeSlots.Length)
+        {
+            freeSlots[freeCount++] = slot;
+        }
+    }
+
+    private static void AcceptFdEpollSlabControls(
+        int epollFd,
+        int listenerFd,
+        int[] controlFds,
+        int[] freeControls,
+        ref int freeControlCount)
+    {
+        while (true)
+        {
+            var controlFd = accept4(listenerFd, 0, 0, SockCloexec);
+            if (controlFd < 0)
+            {
+                var error = Marshal.GetLastPInvokeError();
+                if (error == Eintr)
+                {
+                    continue;
+                }
+
+                return;
+            }
+
+            if (!TryRentSlot(freeControls, ref freeControlCount, out var slot))
+            {
+                CloseFd(controlFd);
+                continue;
+            }
+
+            controlFds[slot] = controlFd;
+            if (EpollAddRaw(epollFd, controlFd, FdEpollSlabControlTag | (uint)slot) < 0)
+            {
+                controlFds[slot] = -1;
+                CloseFd(controlFd);
+                ReturnSlot(freeControls, ref freeControlCount, slot);
+            }
+        }
+    }
+
+    private static unsafe void ReceiveFdEpollSlabClients(
+        int epollFd,
+        int controlFd,
+        int[] clientFds,
+        int[] usedBytes,
+        int[] handledRequests,
+        int[] freeClients,
+        ref int freeClientCount,
+        IntPtr bufferBase)
+    {
+        while (true)
+        {
+            var clientFd = ReceiveSocketFdRaw(controlFd, null, out var initialLength, MsgDontWait, out var wouldBlock);
+            if (clientFd < 0)
+            {
+                return;
+            }
+
+            if (!TryRentSlot(freeClients, ref freeClientCount, out var slot))
+            {
+                CloseFd(clientFd);
+                continue;
+            }
+
+            clientFds[slot] = clientFd;
+            usedBytes[slot] = Math.Clamp(initialLength, 0, Constants.MaxRequestBytes);
+            handledRequests[slot] = 0;
+
+            if (EpollAddRaw(epollFd, clientFd, FdEpollSlabClientTag | (uint)slot) < 0)
+            {
+                clientFds[slot] = -1;
+                usedBytes[slot] = 0;
+                handledRequests[slot] = 0;
+                CloseFd(clientFd);
+                ReturnSlot(freeClients, ref freeClientCount, slot);
+                continue;
+            }
+        }
+    }
+
+    private static unsafe void HandleFdEpollSlabClient(
+        int epollFd,
+        int slot,
+        int[] clientFds,
+        int[] usedBytes,
+        int[] handledRequests,
+        int[] freeClients,
+        ref int freeClientCount,
+        IntPtr bufferBase,
+        BinaryIndex? index,
+        SearchParams searchParams,
+        int keepAliveRequests)
+    {
+        if ((uint)slot >= (uint)clientFds.Length || clientFds[slot] < 0 || index is null)
+        {
+            if ((uint)slot < (uint)clientFds.Length)
+            {
+                CloseFdEpollSlabClient(epollFd, slot, clientFds, usedBytes, handledRequests, freeClients, ref freeClientCount);
+            }
+
+            return;
+        }
+
+        var fd = clientFds[slot];
+        var buffer = new Span<byte>((byte*)bufferBase + (slot * Constants.MaxRequestBytes), Constants.MaxRequestBytes);
+
+        while (true)
+        {
+            var used = usedBytes[slot];
+            if (RequestComplete(buffer[..used], out var headerEnd, out var contentLength))
+            {
+                Send(fd, SelectResponse(buffer[..used], headerEnd, contentLength, index, searchParams).Span);
+                handledRequests[slot]++;
+                if (keepAliveRequests > 0 && handledRequests[slot] >= keepAliveRequests)
+                {
+                    CloseFdEpollSlabClient(epollFd, slot, clientFds, usedBytes, handledRequests, freeClients, ref freeClientCount);
+                    return;
+                }
+
+                usedBytes[slot] = 0;
+                continue;
+            }
+
+            if (used >= buffer.Length)
+            {
+                Send(fd, DefaultResponse);
+                CloseFdEpollSlabClient(epollFd, slot, clientFds, usedBytes, handledRequests, freeClients, ref freeClientCount);
+                return;
+            }
+
+            var read = ReceiveDontWait(fd, buffer[used..], out var wouldBlock);
+            if (read > 0)
+            {
+                usedBytes[slot] = used + read;
+                continue;
+            }
+
+            if (wouldBlock)
+            {
+                return;
+            }
+
+            CloseFdEpollSlabClient(epollFd, slot, clientFds, usedBytes, handledRequests, freeClients, ref freeClientCount);
+            return;
+        }
+    }
+
+    private static void CloseFdEpollSlabControl(
+        int epollFd,
+        int slot,
+        int[] controlFds,
+        int[] freeControls,
+        ref int freeControlCount)
+    {
+        if ((uint)slot >= (uint)controlFds.Length || controlFds[slot] < 0)
+        {
+            return;
+        }
+
+        var ev = default(EpollEvent);
+        _ = epoll_ctl(epollFd, EpollCtlDel, controlFds[slot], ref ev);
+        CloseFd(controlFds[slot]);
+        controlFds[slot] = -1;
+        ReturnSlot(freeControls, ref freeControlCount, slot);
+    }
+
+    private static void CloseFdEpollSlabClient(
+        int epollFd,
+        int slot,
+        int[] clientFds,
+        int[] usedBytes,
+        int[] handledRequests,
+        int[] freeClients,
+        ref int freeClientCount)
+    {
+        if ((uint)slot >= (uint)clientFds.Length || clientFds[slot] < 0)
+        {
+            return;
+        }
+
+        var ev = default(EpollEvent);
+        _ = epoll_ctl(epollFd, EpollCtlDel, clientFds[slot], ref ev);
+        CloseFd(clientFds[slot]);
+        clientFds[slot] = -1;
+        usedBytes[slot] = 0;
+        handledRequests[slot] = 0;
+        ReturnSlot(freeClients, ref freeClientCount, slot);
     }
 
     private static void RunFdDedicatedConnection(object? state)
@@ -800,11 +1186,6 @@ internal static class HttpServer
                 Used = Math.Clamp(initialLength, 0, buffer.Length)
             };
             state.Handle = GCHandle.Alloc(state);
-            if (TcpQuickAck)
-            {
-                TrySetTcpQuickAck(clientFd);
-            }
-
             if (EpollAdd(epollFd, state) < 0)
             {
                 CloseFd(clientFd);
@@ -815,11 +1196,6 @@ internal static class HttpServer
 
             if (state.Used > 0)
             {
-                if (TcpQuickAck)
-                {
-                    TrySetTcpQuickAck(clientFd);
-                }
-
                 HandleFdEpollClient(epollFd, state, index, searchParams, keepAliveRequests);
             }
         }
@@ -887,6 +1263,69 @@ internal static class HttpServer
             Data = GCHandle.ToIntPtr(state.Handle)
         };
         return epoll_ctl(epollFd, EpollCtlAdd, state.Fd, ref ev);
+    }
+
+    private static int EpollAddRaw(int epollFd, int fd, ulong token)
+    {
+        var ev = new EpollEvent
+        {
+            Events = EpollIn | EpollErr | EpollHup | EpollRdHup,
+            Data = (nint)token
+        };
+        return epoll_ctl(epollFd, EpollCtlAdd, fd, ref ev);
+    }
+
+    private static unsafe int EpollWait(int epollFd, EpollEvent* events, int maxEvents)
+    {
+        if (FdEpollSpinTicks > 0)
+        {
+            var deadline = Stopwatch.GetTimestamp() + FdEpollSpinTicks;
+            while (true)
+            {
+                var ready = epoll_wait(epollFd, events, maxEvents, 0);
+                if (ready != 0)
+                {
+                    return ready;
+                }
+
+                if (Stopwatch.GetTimestamp() >= deadline)
+                {
+                    break;
+                }
+
+                Thread.SpinWait(1);
+            }
+        }
+
+        if (FdEpollTimeoutUs > 0 && Volatile.Read(ref epollPwait2Disabled) == 0)
+        {
+            var timeout = new Timespec
+            {
+                Seconds = FdEpollTimeoutUs / 1_000_000,
+                Nanoseconds = (FdEpollTimeoutUs % 1_000_000) * 1_000
+            };
+
+            try
+            {
+                var ready = epoll_pwait2(epollFd, events, maxEvents, &timeout, 0);
+                if (ready >= 0)
+                {
+                    return ready;
+                }
+
+                if (Marshal.GetLastPInvokeError() != Enosys)
+                {
+                    return ready;
+                }
+            }
+            catch (EntryPointNotFoundException)
+            {
+            }
+
+            Volatile.Write(ref epollPwait2Disabled, 1);
+        }
+
+        return epoll_wait(epollFd, events, maxEvents, FdEpollTimeoutMs);
     }
 
     private static void CloseFdEpollState(int epollFd, FdEpollState state)
@@ -1274,7 +1713,17 @@ internal static class HttpServer
         BinaryIndex index,
         SearchParams searchParams)
     {
-        var request = buffer.AsSpan(0, used);
+        return SelectResponse(buffer.AsSpan(0, used), headerEnd, contentLength, index, searchParams);
+    }
+
+    [SkipLocalsInit]
+    private static ReadOnlyMemory<byte> SelectResponse(
+        ReadOnlySpan<byte> request,
+        int headerEnd,
+        int contentLength,
+        BinaryIndex index,
+        SearchParams searchParams)
+    {
         if (!AssumeFraudScorePath &&
             !request.StartsWith("POST /fraud-score "u8) &&
             !request.StartsWith("POST /fraud-score?"u8))
@@ -1631,20 +2080,14 @@ internal static class HttpServer
         }
     }
 
-    private static void TrySetTcpQuickAck(int fd)
-    {
-        var value = 1;
-        _ = setsockopt(fd, IpProtoTcp, TcpQuickAckOption, ref value, sizeof(int));
-    }
-
     private const int SolSocket = 1;
     private const int ScmRights = 1;
     private const int Eintr = 4;
     private const int Eagain = 11;
+    private const int Enosys = 38;
     private const int FGetFl = 3;
     private const int FSetFl = 4;
-    private const int IpProtoTcp = 6;
-    private const int TcpQuickAckOption = 12;
+    private const int MclCurrent = 1;
     private const int ONonBlock = 0x800;
     private const int SockCloexec = 0x80000;
     private const int EpollCloexec = 0x80000;
@@ -1662,6 +2105,13 @@ internal static class HttpServer
     {
         public uint Events;
         public nint Data;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Timespec
+    {
+        public long Seconds;
+        public long Nanoseconds;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -1696,9 +2146,6 @@ internal static class HttpServer
     private static extern int close(int fd);
 
     [DllImport("libc", SetLastError = true)]
-    private static extern int setsockopt(int socket, int level, int optionName, ref int optionValue, int optionLength);
-
-    [DllImport("libc", SetLastError = true)]
     private static extern int accept4(int sockfd, nint addr, nint addrlen, int flags);
 
     [DllImport("libc", SetLastError = true)]
@@ -1709,6 +2156,12 @@ internal static class HttpServer
 
     [DllImport("libc", SetLastError = true)]
     private static extern unsafe int epoll_wait(int epfd, EpollEvent* events, int maxevents, int timeout);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern unsafe int epoll_pwait2(int epfd, EpollEvent* events, int maxevents, Timespec* timeout, nint sigmask);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int mlockall(int flags);
 
     [DllImport("libc", SetLastError = true)]
     private static extern int fcntl(int fd, int cmd, int arg);

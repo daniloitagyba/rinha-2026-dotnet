@@ -6,14 +6,17 @@ summary, not a raw session log.
 ## Current Target
 
 - Goal: local official k6 `p99 <= 0.50ms`, zero errors, APIs still in `.NET`.
-- Best observed full local result on the `.NET` API line:
-  `p99=0.46ms`, `final_score=6000`, `fp=0`, `fn=0`, `http_errors=0`,
-  `failure_rate=0`, with the reference-gated profile fast path plus
-  `FD_EPOLL=1` and `FD_EPOLL_TIMEOUT_MS=1`.
-  The same bundle was immediately repeated at `p99=0.47ms` and `p99=0.46ms`.
+- Best observed full local result on the allowed Docker bridge/default
+  networking path:
+  `p99=0.43ms-0.44ms`, `final_score=6000`, `fp=0`, `fn=0`, `http_errors=0`,
+  `failure_rate=0`, with the reference-gated profile fast path,
+  `FD_EPOLL=1`, `FD_EPOLL_TIMEOUT_MS=1`, and
+  `FD_EPOLL_TIMEOUT_US=200/250`.
+- Results `p99=0.43ms-0.44ms` from `network_mode: none` are invalid for this
+  project because compose networking must stay on bridge/default.
 - The local `0.50ms` / `0.52ms` targets are achieved for the current reference
-  set by that protected experimental bundle. This has not been promoted to the
-  safe default and has not been remote-tested yet.
+  set by that protected experimental bundle. The `0.40ms` local target is not
+  achieved yet.
 
 ## Current Safe Baseline
 
@@ -26,14 +29,205 @@ The current safe default keeps:
 - `KDTREE_LEAF_SIZE=96`
 - `KDTREE_KEY_PROFILE=0`
 - `lb=0.12 CPU`, `api1/api2=0.44 CPU`
+- Docker bridge/default networking
 - `TP_MIN_THREADS=64`
 - `TP_MIN_IO_THREADS=4`
 - `lb.sysctls.net.core.somaxconn=65535`
 - `LB_PRECONNECT_CONTROL=1` in fdpass LB, to open backend control channels
   before the first client traffic when possible.
 - Current best local bundle additionally enables `FD_EPOLL=1` and
-  `FD_EPOLL_TIMEOUT_MS=1`; keep this treated as an explicit benchmark/submission
-  setting, not as a generic safe default.
+  `FD_EPOLL_TIMEOUT_MS=1`; the fastest bridge/default bundle also sets
+  `FD_EPOLL_TIMEOUT_US=200` or `250`. Keep these treated as explicit
+  benchmark/submission settings, not as generic safe defaults.
+
+## External Repo Notes
+
+### lucasmontano/rinha-backend-2026-detecta-fraude
+
+- Current `main` checked at `a8960a2b90de39fd3c4b8705d8497c2fcb8efc58`
+  is a compliant vector-search implementation, not the older
+  payload-derived/blacklist model. It documents and implements
+  request payload -> 14-dimensional vector -> nearest-neighbor search over
+  official references -> `fraud_count / 5`.
+- Transport lessons are mostly already present or tested here: fd-pass LB with
+  `SCM_RIGHTS`, tmpfs Unix sockets, one worker per API, pre-rendered responses,
+  epoll, `TCP_QUICKACK`, logging disabled, CPU pinning, and optional epoll
+  busy-poll. Do not re-run the same transport family unless the implementation
+  is materially different.
+- The only material remaining algorithm lesson is the index layout family:
+  mmap/populated binary index, KD pair-SoA layout, AVX2 lower-bound/leaf scans,
+  and optional IVF with bounded repair for ambiguous counts. This is worth a
+  reference-gated experiment only if it is compared against the current native
+  KD path by eval plus full local k6 with zero FP/FN.
+- Do not copy any historical generated model or payload-label shortcut from
+  older revisions. Only the current reference-index ideas are admissible for
+  this project.
+
+### d3vk1ng1337/rinha-backend-26-zero
+
+- Rule status: the default `deploy/docker-compose.yml` appears compliant on
+  static inspection: bridge/default network, no `privileged`, no
+  `security_opt`, no `sysctls`, resources sum to 1 CPU / 350 MB, and the LB
+  only passes accepted fds to workers via `SCM_RIGHTS`.
+- The `deploy/docker-compose.uring.yml` variant is not a safe remote candidate
+  for this project without a separate kernel/capability gate. Treat io_uring as
+  an experiment only, not a submission assumption.
+- Applicable idea not yet proven in this `.NET` line: worker wait strategy with
+  a short userspace spin before `epoll_pwait2` microsecond sleep
+  (`EPOLL_SPIN_US` around 10-20us, `EPOLL_IDLE_US` around 80us). This differs
+  from the already-tested plain `FD_EPOLL_TIMEOUT_US=200`.
+- Algorithm ideas match what is already known: int16 IVF, AVX2 pair-SoA,
+  bbox repair for ambiguous counts, reusable repair scratch, and warmup. These
+  are useful references but are not drop-in for the current KD-tree native path.
+
+### SrPatoS/rinha-2026-c
+
+- Rule status: blacklist for classifier logic. The repo includes
+  `src/known_ids.inc` and the API checks transaction IDs such as `tx-*` before
+  falling back to vector search. This is payload/test-data lookup behavior and
+  must not be copied.
+- The compose topology itself uses bridge/default networking, no
+  `privileged`, no `security_opt`, no `sysctls`, tmpfs sockets, and 1 CPU /
+  350 MB limits, but the classification shortcut is enough to reject it as a
+  source of scoring logic.
+- Only generic transport ideas may be considered: fd-pass LB, tmpfs socket
+  volume, `SO_REUSEPORT`, `TCP_DEFER_ACCEPT`, `TCP_QUICKACK`, and simple
+  fd-indexed epoll state. Most of these were already tested or are present in
+  this project; do not retest them unless the implementation is materially
+  different.
+
+### dalvorsn/cpp-rinha-backend-2026
+
+- Rule status: the main `docker-compose.yml` appears compliant on static
+  inspection: bridge/default network, no `privileged`, no `security_opt`, no
+  `sysctls`, resource limits total 1 CPU / 350 MB, and the LB only hands fds
+  to API processes. Monitoring services are behind a profile and are not part
+  of the normal submission path.
+- Useful confirmed ideas: pre-rendered responses, fd-pass LB, API epoll loop,
+  `mlockall(MCL_CURRENT)`, warmup, `TCP_NODELAY`/`TCP_QUICKACK`, and IVF with
+  AVX2 pair-SoA centroid/block scans plus bbox repair. Most transport pieces
+  are already covered here.
+- The most applicable untested/partially-tested idea is algorithmic, not HTTP:
+  compare current KD-tree native search against a reference-gated IVF candidate
+  with exact repair. It must remain behind a reference hash gate because
+  approximate `nprobe`/borderline heuristics can create FP/FN on changed
+  references.
+- Their repair code has an early stop once the result becomes unambiguous.
+  That is faster but riskier than scanning every bbox-viable repair candidate.
+  Only test under full eval plus k6; do not promote if any FP/FN appears.
+
+### bmtec/rinha-backend-2026
+
+- Rule status: `main` and `submission` compose files appear compliant on static
+  inspection: bridge/default network, no `privileged`, no `security_opt`, no
+  `sysctls`, and resources sum to 1 CPU / 350 MB. `test/docker-compose.yml`
+  uses `network_mode: host`, but that is a local test harness and must not be
+  copied to submission.
+- Load balancer: Rust LB only accepts TCP and passes file descriptors to API
+  workers with `SCM_RIGHTS`; it does not parse the fraud payload. This matches
+  the competition rule and is conceptually equivalent to our current fd-pass
+  topology.
+- Classifier/index: uses an IVF index built into the image, int16 quantized
+  vectors, block lower-bound pruning, and f32 rerank of the best candidates.
+  It also adapts `nprobe` for risky neighbor patterns. Treat this as a useful
+  algorithm reference, not as a drop-in change: approximate/adaptive behavior
+  can create FP/FN if references or payload distribution drift.
+- Applicable low-risk ideas for our .NET-preserving line: test a more
+  API-heavy CPU split (`lb` near 0.01 CPU, APIs near 0.495 each) and compare
+  `FD_EPOLL_TIMEOUT_US=80` against the current best local bundle.
+- Already covered or rejected locally: fd-pass LB, preformatted responses, raw
+  parser fast path, busy-poll, TCP defer accept, and a simple fd-indexed event
+  table. Do not retest these without a materially different implementation.
+- Local follow-up on the applicable ideas, using the protected current bundle
+  as baseline (`PROFILE_FASTPATH` hash-gated, `FD_EPOLL=1`,
+  `FD_EPOLL_TIMEOUT_US=200`): baseline reached `p99=0.45ms`, score `6000`,
+  zero FP/FN/HTTP errors. `LB_CPU=0.01/API_CPU=0.495` worsened to `0.46ms`;
+  `FD_EPOLL_TIMEOUT_US=80` worsened to `0.47ms`; combining both reached
+  `0.46ms`; intermediate `LB_CPU=0.04/API_CPU=0.48` also reached `0.46ms`.
+  Keep the current CPU split and `200us` timeout.
+
+### fksegundo/rinha-dotnet
+
+- Rule status: do not use as a submission topology reference. The current
+  `submission/docker-compose.yml` sets `network_mode: "none"` for `api2`, and
+  the main Docker compose uses the same forbidden pattern. The official rule
+  requires Docker bridge/default networking; host, none, and privileged modes
+  must not be used. The cloned repo also did not contain an MIT license file,
+  while the official submission docs require participant repositories to be
+  MIT licensed.
+- Other rule checks: resource limits sum to `1.0` CPU and `350M`, the Rust LB
+  only accepts TCP connections and passes client fds to APIs with
+  `SCM_RIGHTS`, and runtime code did not show test-payload lookup. The
+  submission branch uses `latest` images and an inconsistent `info.json`
+  source repo, which is not the main rule break but is bad reproducibility.
+- Applicable lessons that do not depend on forbidden networking: keep fd-pass
+  LB thin, keep APIs as .NET Native AOT, prebuild and mmap the index in the
+  image, keep parser fallback for payload order drift, and prewarm query plus
+  payload paths. These are already mostly present in our line.
+- Ideas already covered/rejected locally from the same family: `network_mode:
+  none` is invalid; epoll busy-poll, `TCP_QUICKACK`, `MALLOC_ARENA_MAX=2`,
+  fd-indexed event tables, edge-trigger epoll, fd recv budgets, and CPU splits
+  around `0.10/0.45` did not beat the current allowed bridge/default bundle.
+- New low-risk code idea to consider only if profiling identifies pressure in
+  the .NET fd loop: a single unmanaged receive buffer slab per connection
+  slot, similar to their event loop. This should not be copied blindly because
+  our previous simpler fd-table attempt regressed.
+- 2026-06-02 fresh recheck: cloned the current repo snapshot again. The main
+  compose still uses `api2.network_mode: "none"`, so the topology remains
+  invalid for this project. Its event-loop ideas (`RINHA_RECV_FD_BUDGET=32`,
+  edge-trigger epoll, 2 KiB receive slots, greedy read, mmap/pretouch/mlock,
+  and client-fd preconfiguration) map to ideas already tested here. The current
+  `.NET` fd-epoll loop already uses `recv(MSG_DONTWAIT)` and does not need a
+  per-client `fcntl` to read nonblocking.
+- The only remaining transport recheck from that snapshot, full k6 with the
+  protected bridge/default bundle plus `LB_FDPASS_NONBLOCK=1`, stayed correct
+  but worsened to `p99=0.47ms`, score `6000`, zero FP/FN/HTTP errors. Do not
+  promote it over the current best bundle.
+
+### rafaelcoelhox/detecta-fraude
+
+- Rule status: do not use as a compliant submission reference as-is. Its
+  `docker-compose.yml` has `api2.network_mode: "none"`, while current Rinha
+  rules require bridge networking. Keep it out of the safe inspiration set for
+  topology/resource decisions.
+- Algorithm status: no evidence found of payload/test-data lookup in the
+  inspected source. The README and code describe parse -> vectorize -> k-NN ->
+  fraud count.
+- Useful techniques already covered here: C fd-passing LB, API-side epoll,
+  `epoll_pwait2` microsecond timeout, mmap/populated index, KD/partition
+  bounding-box pruning, AVX2 leaf scan, pre-rendered responses.
+- Tested idea from this repo: returning to epoll immediately after a response
+  instead of doing another nonblocking read. Local smoke with
+  `FD_EPOLL_YIELD_AFTER_RESPONSE=1` regressed to `p99=0.53ms`, score `6000`,
+  zero errors. Do not keep this flag.
+- Linux `EPIOCSPARAMS` epoll busy-poll was later tested from the
+  `fksegundo/rinha-rust` review and rejected for this line.
+
+### fksegundo/rinha-rust
+
+- Rule status: the `main` compose files use `api2.network_mode: "none"`, so do
+  not use `main` topology as a compliant reference. The repo's `submission`
+  branch compose removes `network_mode`, stays on bridge/default, and appears
+  statically compatible on CPU/memory/security fields.
+- Caveat: `submission` points at `filonsegundo/rinha-rust:no-pgo`, while
+  `main` documents other images. Treat source-to-image equivalence as
+  unverified unless the image is inspected separately.
+- Useful ideas already covered here: fd-passing LB, API-side epoll,
+  microsecond epoll timeout, mmap/pretouch, KD/partition pruning, AVX2 leaf
+  scan, fixed responses, warmup knobs.
+- Retested applicable knobs against the current bridge/default `.NET` bundle
+  with `FD_EPOLL_TIMEOUT_US=200`:
+  `LB_FDPASS_NONBLOCK=1` tied smoke at `p99=0.44ms`, score `6000`, zero errors;
+  `TCP_DEFER_ACCEPT=1` worsened to `0.46ms`.
+- Implemented and tested Linux `EPIOCSPARAMS` epoll busy-poll under opt-in
+  flags, then removed it: `FD_BUSY_POLL_US=20` worsened smoke to `0.48ms` and
+  `35` to `0.45ms`, score `6000`, zero errors.
+- Implemented and tested the fd-indexed event table idea to remove
+  `GCHandle` per epoll connection, then reverted it: smoke worsened to
+  `0.49ms`, score `6000`, zero errors.
+- Final smoke after reversions with the base current bundle returned
+  `p99=0.47ms`, score `6000`, zero errors. Best validated full local result
+  remains the earlier `0.43ms-0.44ms` bridge/default bundle.
 
 Reason: after the reference/test data changed, aggressive profile fast paths
 created false positives/false negatives remotely. The safe path prioritizes
@@ -125,12 +319,13 @@ Additional final-candidate rechecks after comparing with the current top
   `FASTPATH_CANARY_REQUESTS=128` `0.53ms`, `256` `0.54ms`, `512` `0.56ms`;
   complete k6 with canary `64/128` stayed at `0.55ms`, while no canary
   rechecked at `0.54ms`.
-- Prewarm tuning did not beat the current candidate. Short k6:
+- Earlier prewarm tuning did not beat the then-current candidate. Short k6:
   `CLASSIFIER_PREWARM=0 TP_PREWARM=0` `0.56ms`,
   `0/64` `0.53ms`, `64/0` `0.57ms`, `128/64` `0.53ms`.
-  Complete k6: `0/64` `0.55ms`, `128/64` `0.54ms`. Keep
-  `CLASSIFIER_PREWARM=64` and `TP_PREWARM=64` only as the current balanced
-  default.
+  Complete k6: `0/64` `0.55ms`, `128/64` `0.54ms`. The later
+  `network_mode:none`/`FD_RECEIVERS=4` bundle with `CLASSIFIER_PREWARM=256`
+  reached `p99=0.44ms`, but it is invalid after the network rule clarification
+  and must not be used as current best.
 - `MALLOC_ARENA_MAX=2` and `DOTNET_gcServer=0`, copied from the top `.NET`
   runtime posture, did not produce a new candidate. Short k6 sequence on the
   current profile bundle: baseline `0.55ms`, `MALLOC_ARENA_MAX=2` `0.54ms`,
@@ -203,6 +398,33 @@ Additional final-candidate rechecks after comparing with the current top
   both `PROFILE_FASTPATH_REFERENCE_SHA256` and
   `EXPECTED_REFERENCES_GZIP_SHA256` for the current references hash
   `43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67`.
+- Continuing toward local `p99=0.40ms`, rechecking `FD_EPOLL_TIMEOUT_MS`
+  showed `1` remains the best allowed bridge/default setting: `0` caused
+  severe tail latency (`p99=80.19ms` in 30s), `2` reached `0.49ms`, and `5`
+  reached `0.52ms`.
+- The `network_mode:none` exploration is invalid for this project after rule
+  clarification: compose networking must remain Docker bridge/default, and
+  host/none/privileged modes are not allowed. Its `p99=0.43ms-0.44ms` results,
+  plus the related `FD_RECEIVERS=4` and `CLASSIFIER_PREWARM=256` candidate,
+  must not be used as current best or as a publication candidate.
+- 2026-05-29 reliable rerun with `TEST_MOUNT=/mnt/c/tmp/...` confirmed the
+  current allowed full-k6 floor is `p99=0.45ms`, score `6000`, zero errors,
+  total `54059`. The previous WSL `test/results.json` path was not always
+  refreshed, so `scripts/k6-local.sh` and `.ps1` now delete `results.json`
+  before k6 and fail if it is not rewritten.
+- Runtime matrix after the bridge rule did not improve the full floor:
+  short-k6 `CLASSIFIER_PREWARM=256` `0.46ms`, `FD_RECEIVERS=4` `0.46ms`,
+  both together `0.44ms`; full k6 with both together tied the baseline at
+  `p99=0.45ms`, score `6000`, zero errors.
+- Classifier eval suggested lower candidate counts and dominant profile
+  fast paths were faster internally and still error-free, but k6 did not
+  confirm a tail gain: `cand6000` `0.48ms`, `cand8000` `0.47ms`,
+  `cand6000 + FD_RECEIVERS=4 + CLASSIFIER_PREWARM=256` `0.47ms`, and
+  `PROFILE_DOMINANT_FASTPATH=1 PROFILE_DOMINANT_MIN_COUNT=20
+  PROFILE_DOMINANT_MAX_OPPOSITE=0` tied baseline at `0.45ms`.
+- A `.NET` epoll experiment that returned immediately after sending a response
+  avoided a likely extra `recv(MSG_DONTWAIT)` but worsened short k6
+  (`0.50ms` vs `0.48ms`) and was removed.
 
 ## Remote History
 
@@ -754,8 +976,8 @@ Runtime:
   `api2=2`) did not improve smoke.
 - Rechecking the same app cpuset isolation in complete k6 worsened to
   `p99=0.59ms`.
-- moving `api1/api2` to `network_mode: none` was correct but complete k6
-  stayed at `p99=0.54ms`.
+- moving `api1/api2` to `network_mode: none` was tested before the network
+  rule clarification; it is invalid for candidates and not a current path.
 - CPU split recheck after bridge opts did not produce a candidate:
   `lb=0.10/api=0.45` only matched short k6 at `0.53ms`, while
   `lb=0.08/api=0.46` and `lb=0.14/api=0.43` stayed around `0.54ms`.
@@ -1179,12 +1401,12 @@ Response/header micro-optimizations:
   window.
 - Temporarily disabling WSL bridge netfilter was only diagnostic and was
   restored; it did not provide a publishable application optimization.
-- The current official local k6 compose uses `network_mode: host` for the k6
-  container and posts to `localhost:9999`. `scripts/k6-local.sh` now supports
-  `K6_NETWORK_MODE=host` to measure that path without changing the default
-  bridge runner.
-- Host-network k6 against the best local bundle is much slower in this WSL
-  Docker setup: complete k6 returned `p99=0.78ms`, score `6000`, zero errors.
+- Host-network k6 diagnostics were explored before the network rule
+  clarification. They are no longer valid for candidate validation; use the
+  default Docker bridge path only.
+- The old host-network k6 check against the best local bundle was slower in
+  this WSL Docker setup: complete k6 returned `p99=0.78ms`, score `6000`,
+  zero errors.
   Short 30s checks stayed in the same band: `localhost` `0.82ms`, `127.0.0.1`
   `0.83ms`.
 - Host-path diagnostics did not expose an application-side candidate:
@@ -1262,9 +1484,169 @@ When references change:
 
 ## Next Plausible Work
 
-- Profile the clean `.NET` fdpass path after `TP_PREWARM=64` to identify the
-  remaining p99 source.
 - Focus on reducing runtime/socket scheduling overhead; classifier-only gains
   have not moved official k6 enough.
 - Treat any new profile shortcut as unsafe until it passes `EVAL_NATIVE_JSON=1`
   and full k6 with zero errors.
+- Experimental `.NET` fd-epoll slab mode (`FD_EPOLL_SLAB=1`) was implemented
+  behind a flag to remove per-client `GCHandle` and `ArrayPool` traffic from
+  the fd-epoll request path. Host `dotnet build` and `self-test` passed.
+  Full WSL k6 with the protected current bundle and
+  `FD_EPOLL_SLAB_CLIENTS=512` tied the allowed bridge/default baseline at
+  `p99=0.45ms`, `final_score=6000`, zero FP/FN/HTTP errors. The 256-slot
+  variant worsened to `p99=0.48ms`. Keep the flag off by default; it is not a
+  better candidate.
+- Follow-up tests from `d3vk1ng1337/rinha-backend-26-zero`,
+  `SrPatoS/rinha-2026-c` transport-only ideas and
+  `dalvorsn/cpp-rinha-backend-2026` runtime hints did not produce a better
+  candidate. Short WSL k6 triage: baseline `0.45ms`; `FD_EPOLL_SPIN_US=5`,
+  `20`, `30`, `TCP_QUICKACK=1`, and `INDEX_HUGEPAGES=1` reached `0.44ms`;
+  `FD_EPOLL_SPIN_US=10/15` and `MLOCK_CURRENT=1` reached `0.45ms`;
+  `TCP_DEFER_ACCEPT=1` worsened to `0.48ms`; `FD_EPOLL_TIMEOUT_US=80` with
+  spin worsened/tied at `0.45ms`; `FD_EPOLL_SLAB=1` plus spin tied `0.45ms`.
+  Full WSL k6 then confirmed the current baseline was best:
+  baseline `p99=0.44ms`, score `6000`, zero errors; `FD_EPOLL_SPIN_US=5`
+  `0.46ms`; `FD_EPOLL_SPIN_US=20` `0.45ms`; `FD_EPOLL_SPIN_US=30`
+  `0.46ms`; `TCP_QUICKACK=1` `0.46ms`; `INDEX_HUGEPAGES=1` `0.46ms`;
+  `FD_EPOLL_SPIN_US=20 INDEX_HUGEPAGES=1` `0.46ms`;
+  `FD_EPOLL_SPIN_US=5 TCP_QUICKACK=1 INDEX_HUGEPAGES=1` `0.45ms`. Keep
+  these knobs off by default and do not publish them as an optimization.
+- Two follow-ups from the latest recommendation were implemented and tested,
+  then removed/reverted because they did not improve the full local gate:
+  preallocating LB `sendmsg`/`cmsghdr` state per backend compiled and passed
+  k6 but returned `p99=0.45ms` in short k6 and `0.46ms` in full k6, score
+  `6000`, zero errors; a direct `.NET` complete-fraud-JSON fast path returned
+  `0.43ms` in short k6 but only `0.45ms` in full k6, score `6000`, zero
+  errors. Neither is a candidate for the `0.40ms` target.
+- Additional syscall-reduction checks on the LB accept path did not improve
+  the protected full local gate: `LB_TCP_NODELAY=0` tied the current floor at
+  `p99=0.44ms`, score `6000`, zero errors; `LB_SOCKET_BUFFERS=0` worsened to
+  `p99=0.48ms`, score `6000`, zero errors. Keep both defaults unchanged.
+- `FD_CONTROL_PREBUFFER=1`, sending initial request bytes together with the
+  passed fd, stayed correct but did not improve full k6: `p99=0.45ms`, score
+  `6000`, zero errors. Keep it off.
+- Combining the prior tie with the alternate best timeout also did not break
+  the floor: `FD_EPOLL_TIMEOUT_US=250 LB_TCP_NODELAY=0` returned `p99=0.44ms`,
+  score `6000`, zero errors. Keep the simpler current bundle.
+- Docker bridge MTU override did not help. Testing an extra compose override
+  with `com.docker.network.driver.mtu=9000` stayed correct but worsened full k6
+  to `p99=0.45ms`, score `6000`, zero errors. The temporary override was
+  removed.
+- Removing `lb.ports` was attempted only as a diagnostic for Docker published
+  port overhead. It is not a valid gate with the current harness because
+  `scripts/k6-local.sh` performs readiness through `http://127.0.0.1:9999`.
+  After bypassing readiness and running k6 inside `rinha-local_default`, the
+  services exited during the run and the result was unusable: `p99=0.00ms`,
+  `http_errors=13903`, `final_score=-3000`. Reject this path; it does not move
+  the `0.40ms` target and cannot be submitted.
+- `FD_EPOLL_TIMEOUT_US=150` did not improve the current protected bundle:
+  full k6 returned `p99=0.46ms`, score `6000`, zero errors. Keep the known
+  `200/250us` range.
+- Moving the disabled fdpass prebuffer storage out of the per-accept stack path
+  was correct but did not improve. Smoke k6 reached `p99=0.43ms`, score
+  `6000`, zero errors; full k6 regressed to `p99=0.45ms`, score `6000`, zero
+  errors. The change was reverted.
+- Docker bridge `com.docker.network.bridge.gateway_mode_ipv4=routed` is not
+  usable with the current official-style local harness: services started, but
+  host readiness on `http://127.0.0.1:9999/ready` failed. The temporary
+  override was removed.
+- Rechecking the external `spin + short idle` wait idea did not produce a
+  candidate on the current protected bundle. 30s smoke k6: baseline `0.46ms`,
+  `FD_EPOLL_SPIN_US=10 FD_EPOLL_TIMEOUT_US=80` `0.47ms`,
+  `20/80` `0.45ms`, `10/120` `0.45ms`, `20/120` `0.45ms`; all score `6000`
+  with zero errors. None justified a full k6 run.
+- `[SuppressGCTransition]` on short fd-epoll syscalls (`close`, `accept4`,
+  `epoll_create1`, `epoll_ctl`, `fcntl`) did not sustain. Smoke k6 reached
+  `p99=0.44ms`, score `6000`, zero errors, but full k6 returned `p99=0.45ms`,
+  score `6000`, zero errors. The change was reverted.
+- Precomputing the `Timespec` used by `epoll_pwait2` was correct but only tied
+  the smoke floor: 30s k6 returned `p99=0.44ms`, score `6000`, zero errors.
+  It did not justify a full-k6 run and was reverted.
+- Native JSON ANN/IVF precheck was tested as a reference-gated experiment
+  before KD fallback. The simple unanimous decision is not safe: with
+  `NATIVE_JSON_ANN_PRECHECK_CANDIDATES=4096`, `legit` mode produced
+  `fp=0 fn=8`, `fraud` mode produced `fp=70 fn=0`, and `both` produced
+  `fp=70 fn=8`; at `11000` candidates it still had `4 FN` or `60 FP` and
+  worse offline latency. The patch was reverted; do not repeat this form of
+  ANN shortcut without an exact repair gate.
+- Runtime smoke rechecks on the protected bundle did not improve the local
+  floor: `SERVER_MODE=raw` worsened to `p99=0.47ms`; `WORKERS=3` tied/lagged
+  at `0.45ms`; `WORKERS=4` worsened to `0.46ms`. Keep `raw-async` and
+  `WORKERS=2`.
+- `INDEX_HUGEPAGES=0` was rechecked because local compose already defaults it
+  to `1`. Smoke k6 tied at `p99=0.44ms`, but full k6 returned `0.45ms`, score
+  `6000`, zero errors. Keep the default `INDEX_HUGEPAGES=1`.
+- `INDEX_HUGEPAGES=0 LB_TCP_NODELAY=0` only tied smoke at `p99=0.44ms`, score
+  `6000`, zero errors. It did not justify full k6.
+- `fksegundo/rinha-dotnet` was inspected at commit `d903189`. Its compose is
+  not rule-compatible with the current constraints because `api2` uses
+  `network_mode: "none"`. Usable ideas were already covered locally:
+  fd-passing/event-loop API, fd-indexed connection table, small buffers,
+  edge-trigger epoll, recv/accept budgets, preconfigured client fd,
+  `MALLOC_ARENA_MAX`, `DOTNET_gcServer=0`, mlock/pretouch, Native AOT AVX2 and
+  prebuilt index. Do not copy the invalid topology; no new candidate was found.
+- API `epoll_wait` event-batch sizing was tested with a temporary
+  `FD_EPOLL_EVENTS` knob. Smoke k6: `16` worsened to `p99=0.46ms`, `32`
+  improved smoke to `0.43ms`, `64` tied at `0.44ms`, and `256` worsened to
+  `0.45ms`. Full k6 for `32` returned `p99=0.44ms`, score `6000`, zero
+  errors; combinations with `LB_TCP_NODELAY=0` and `FD_EPOLL_TIMEOUT_US=250`
+  did not improve. The knob was removed; default event batch remains `128`.
+- Extending the microsecond idle timeout past the known `200/250us` range did
+  not help: `FD_EPOLL_TIMEOUT_US=300` worsened smoke to `p99=0.50ms`, score
+  `6000`, zero errors. Do not explore higher timeout values without a new
+  scheduler signal.
+- Accepting API fdpass control sockets with `SOCK_NONBLOCK`, mirroring the slab
+  loop, stayed correct but worsened protected smoke to `p99=0.45ms`, score
+  `6000`, zero errors. The change was reverted; keep blocking accepted control
+  sockets plus `recvmsg(..., MSG_DONTWAIT)`.
+- Rechecking the older zero-error profile candidate on the current protected
+  bundle confirmed it is still not useful: `PROFILE_LEGIT_MIN_COUNT=10`,
+  `PROFILE_FRAUD_MIN_COUNT=6`, `PROFILE_FRAUD_AMOUNT_MIN=3950` passed native
+  JSON eval with zero errors, but eval p99 was worse (`40558ns`) and smoke k6
+  worsened to `p99=0.45ms`, score `6000`, zero errors. Keep `15/8/4000`.
+- Additional explicit profile rechecks also confirmed the current threshold is
+  still best offline: `12/7/4000`, `8/7/4000`, and `15/7/4000` all passed
+  zero-error native JSON eval but stayed around `47us` p99, while the current
+  `15/8/4000` measured `35.5us` p99 on the same image.
+- Older `lucasmontano/rinha-backend-2026-detecta-fraude` revisions used
+  payload-derived/generated-model classifier logic and must not be copied.
+  Current `main` at `a8960a2b90de39fd3c4b8705d8497c2fcb8efc58` was reworked
+  into a compliant reference-vector search; see the external-repo note above.
+  Its transport ideas remain already-covered locally. A temporary `.NET`
+  reproduction of its epoll `EPIOCSPARAMS` busy-poll tied or worsened:
+  `100us` and `50us` tied `p99=0.44ms`; `FD_EPOLL_TIMEOUT_US=60` plus
+  `100us` worsened to `0.45ms`, all score `6000`, zero errors. Do not repeat
+  busy-poll unless there is a new kernel/runtime signal.
+- Profile low-amount fraud threshold relaxation was tested and rejected. Native
+  eval suggested a small internal p99 improvement for
+  `PROFILE_FRAUD_LOW_AMOUNT_KM_HOME_MIN=4000` and
+  `PROFILE_FRAUD_LOW_AMOUNT_TX24H_MIN=3800`, and 30s smoke k6 reached
+  `p99=0.43ms`, score `6000`, zero errors. Full 2-minute k6, however,
+  produced `7` false positives, `p99=0.45ms`, and final score `5729.07`.
+  Do not use this profile relaxation; keep the stricter current thresholds.
+- Disabling Docker service logs through the local harness (`LOGGING_NONE=1`)
+  stayed correct but did not improve the current protected bundle: 30s smoke k6
+  returned `p99=0.44ms`, score `6000`, zero errors. Do not treat it as a
+  candidate optimization.
+- Finer `FD_EPOLL_TIMEOUT_US` checks between the known points did not improve:
+  `180us` returned `p99=0.45ms` and `220us` returned `0.46ms` in 30s smoke
+  k6, both with score `6000` and zero errors. Keep the established
+  `200/250us` range; no full-k6 run justified.
+- `KDTREE_BLOCK_SCAN=1` / `BUILD_KDTREE_BLOCK_INDEX=1`, inspired by the
+  Lucas KD pair-SoA leaf layout, was implemented as an opt-in experiment with
+  a separate KD block-vector index section. Full local eval stayed exact and
+  was slightly better (`p99 77.98us` vs baseline `78.84us`, zero FP/FN), but
+  protected 30s k6 worsened from baseline `p99=0.44ms` to `0.46ms`, both
+  score `6000`. Keep it disabled; it is not a candidate for the `0.40ms`
+  target.
+- API-side socket setup after fd-pass was removed. Once the LB accepts the
+  client fd and sends it via `SCM_RIGHTS`, the API no longer reapplies
+  `TCP_QUICKACK`, `Socket.NoDelay`, receive timeout, send timeout, or blocking
+  mode on that client fd. The LB remains responsible for accept-time client fd
+  setup; the API only receives, registers/processes, sends, and closes it.
+  Protected 30s k6 stayed at `p99=0.44ms`, score `6000`, zero FP/FN/HTTP
+  errors.
+- Release candidate full local k6 on 2026-06-03, after removing API-side
+  post-fdpass socket setup and keeping `KDTREE_BLOCK_SCAN=0`, returned
+  `p99=0.45ms`, `final_score=6000`, zero FP/FN/HTTP errors, Docker
+  bridge/default networking, and the protected reference-gated profile bundle.

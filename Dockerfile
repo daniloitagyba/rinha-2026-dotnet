@@ -21,6 +21,7 @@ RUN clang -O3 -DNDEBUG -march=haswell -mtune=haswell $NATIVE_CFLAGS_EXTRA -DKDTR
 ARG BUILD_BLOCK_INDEX=0
 ARG BUILD_NATIVE_ONLY_INDEX=1
 ARG BUILD_KDTREE_INDEX=1
+ARG BUILD_KDTREE_BLOCK_INDEX=0
 ARG KDTREE_LEAF_SIZE=96
 RUN mkdir -p /out/data \
     && if [ -f resources/references.json.gz ]; then \
@@ -35,7 +36,7 @@ RUN mkdir -p /out/data \
     && if [ ! -f /out/data/references.idx ]; then \
          refs_sha="$(sha256sum "$refs_gz" | awk '{print $1}')" ; \
          gzip -dc "$refs_gz" \
-           | REFERENCES_GZIP_SHA256="$refs_sha" BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" BUILD_NATIVE_ONLY_INDEX="$BUILD_NATIVE_ONLY_INDEX" BUILD_KDTREE_INDEX="$BUILD_KDTREE_INDEX" KDTREE_LEAF_SIZE="$KDTREE_LEAF_SIZE" KDTREE_KEY_PROFILE="$KDTREE_KEY_PROFILE" /out/app/RinhaFraud build-index /out/data/references.idx ; \
+           | REFERENCES_GZIP_SHA256="$refs_sha" BUILD_BLOCK_INDEX="$BUILD_BLOCK_INDEX" BUILD_NATIVE_ONLY_INDEX="$BUILD_NATIVE_ONLY_INDEX" BUILD_KDTREE_INDEX="$BUILD_KDTREE_INDEX" BUILD_KDTREE_BLOCK_INDEX="$BUILD_KDTREE_BLOCK_INDEX" KDTREE_LEAF_SIZE="$KDTREE_LEAF_SIZE" KDTREE_KEY_PROFILE="$KDTREE_KEY_PROFILE" /out/app/RinhaFraud build-index /out/data/references.idx ; \
        fi \
     && test -s /out/data/references.idx
 

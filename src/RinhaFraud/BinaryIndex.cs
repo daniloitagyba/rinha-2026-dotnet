@@ -48,6 +48,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private const uint SectionKdLabels = 19;
     private const uint SectionKdIds = 20;
     private const uint SectionBuildInfo = 21;
+    private const uint SectionKdBlockVectors = 22;
     private const int KdPartitionCount = 256;
     private const int KdVectorStride = 16;
     private const int KdPartitionRecordSize = 72;
@@ -85,6 +86,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly long _kdPartitionsOffset;
     private readonly long _kdNodesOffset;
     private readonly long _kdVectorsOffset;
+    private readonly long _kdBlockVectorsOffset;
     private readonly long _kdLabelsOffset;
     private readonly long _kdIdsOffset;
     private readonly int _riskyMappedCount;
@@ -105,6 +107,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private readonly bool _useNativeAnn;
     private readonly bool _useNativeAnnDirect;
     private readonly bool _useNativeKd;
+    private readonly bool _useNativeKdBlockScan;
     private readonly bool _useIvfOrder;
     private readonly bool _useMappedSimd;
     private readonly bool _useBlockScan;
@@ -152,6 +155,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         long kdPartitionsOffset,
         long kdNodesOffset,
         long kdVectorsOffset,
+        long kdBlockVectorsOffset,
         long kdLabelsOffset,
         long kdIdsOffset,
         int riskyMappedCount,
@@ -172,6 +176,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         bool useNativeAnn,
         bool useNativeAnnDirect,
         bool useNativeKd,
+        bool useNativeKdBlockScan,
         bool useIvfOrder,
         bool useMappedSimd,
         bool useBlockScan,
@@ -219,6 +224,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _kdPartitionsOffset = kdPartitionsOffset;
         _kdNodesOffset = kdNodesOffset;
         _kdVectorsOffset = kdVectorsOffset;
+        _kdBlockVectorsOffset = kdBlockVectorsOffset;
         _kdLabelsOffset = kdLabelsOffset;
         _kdIdsOffset = kdIdsOffset;
         _riskyMappedCount = riskyMappedCount;
@@ -239,6 +245,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
         _useNativeAnn = useNativeAnn;
         _useNativeAnnDirect = useNativeAnnDirect;
         _useNativeKd = useNativeKd && kdPartitionsOffset != 0;
+        _useNativeKdBlockScan = _useNativeKd && useNativeKdBlockScan && kdBlockVectorsOffset != 0;
         _useIvfOrder = useIvfOrder;
         _useMappedSimd = useMappedSimd;
         _useBlockScan = useBlockScan && blockVectorsOffset != 0;
@@ -318,6 +325,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var useNativeAnn = EnvBool("NATIVE_ANN", false);
             var useNativeAnnDirect = EnvBool("NATIVE_ANN_DIRECT", false);
             var useNativeKd = EnvBool("KDTREE_NATIVE", false);
+            var useNativeKdBlockScan = EnvBool("KDTREE_BLOCK_SCAN", false);
             var kdMaxPartitions = Math.Clamp(EnvInt("KDTREE_MAX_PARTITIONS", KdPartitionCount), 1, KdPartitionCount);
             var useIvfOrder = EnvBool("IVF_ORDER", false);
             var useMappedSimd = EnvBool("MAPPED_SIMD", true);
@@ -454,6 +462,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var kdPartitionsOffset = 0L;
             var kdNodesOffset = 0L;
             var kdVectorsOffset = 0L;
+            var kdBlockVectorsOffset = 0L;
             var kdLabelsOffset = 0L;
             var kdIdsOffset = 0L;
             if (useNativeKd &&
@@ -470,6 +479,15 @@ internal unsafe sealed class BinaryIndex : IDisposable
             {
                 useNativeKd = false;
             }
+
+            var kdBlockCount = (count + BlockLaneCount - 1) / BlockLaneCount;
+            kdBlockVectorsOffset = useNativeKd && ValidSection(
+                sections.KdBlockVectorsOffset,
+                sections.KdBlockVectorsLength,
+                kdBlockCount * BlockVectorStride * 2L)
+                ? sections.KdBlockVectorsOffset
+                : 0;
+            useNativeKdBlockScan = useNativeKdBlockScan && kdBlockVectorsOffset != 0;
 
             return new BinaryIndex(
                 mappedFile,
@@ -503,6 +521,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 kdPartitionsOffset,
                 kdNodesOffset,
                 kdVectorsOffset,
+                kdBlockVectorsOffset,
                 kdLabelsOffset,
                 kdIdsOffset,
                 riskyMappedCount,
@@ -523,6 +542,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                 useNativeAnn,
                 useNativeAnnDirect,
                 useNativeKd,
+                useNativeKdBlockScan,
                 useIvfOrder,
                 useMappedSimd,
                 useBlockScan,
@@ -583,7 +603,15 @@ internal unsafe sealed class BinaryIndex : IDisposable
         {
             checksum ^= PrefaultRange(_kdPartitionsOffset, KdPartitionCount * KdPartitionRecordSize);
             checksum ^= PrefaultRange(_kdNodesOffset, _kdNodeCount * KdNodeRecordSize);
-            checksum ^= PrefaultRange(_kdVectorsOffset, _count * KdVectorStride * 2L);
+            if (_useNativeKdBlockScan)
+            {
+                var kdBlockCount = (_count + BlockLaneCount - 1) / BlockLaneCount;
+                checksum ^= PrefaultRange(_kdBlockVectorsOffset, kdBlockCount * BlockVectorStride * 2L);
+            }
+            else
+            {
+                checksum ^= PrefaultRange(_kdVectorsOffset, _count * KdVectorStride * 2L);
+            }
             checksum ^= PrefaultRange(_kdLabelsOffset, _count);
             checksum ^= PrefaultRange(_kdIdsOffset, _count * 4L);
         }
@@ -716,7 +744,17 @@ internal unsafe sealed class BinaryIndex : IDisposable
         {
             fixed (short* queryPtr = query)
             {
-                return NativeClassifyKdTreeAvx2(
+                return _useNativeKdBlockScan
+                    ? NativeClassifyKdTreeBlockAvx2(
+                        _ptr + _kdPartitionsOffset,
+                        _ptr + _kdNodesOffset,
+                        (short*)(_ptr + _kdBlockVectorsOffset),
+                        _ptr + _kdLabelsOffset,
+                        (int*)(_ptr + _kdIdsOffset),
+                        queryPtr,
+                        _kdNodeCount,
+                        _kdMaxPartitions)
+                    : NativeClassifyKdTreeAvx2(
                     _ptr + _kdPartitionsOffset,
                     _ptr + _kdNodesOffset,
                     (short*)(_ptr + _kdVectorsOffset),
@@ -734,7 +772,17 @@ internal unsafe sealed class BinaryIndex : IDisposable
 
         fixed (short* queryPtr = paddedQuery)
         {
-            return NativeClassifyKdTreeAvx2(
+            return _useNativeKdBlockScan
+                ? NativeClassifyKdTreeBlockAvx2(
+                    _ptr + _kdPartitionsOffset,
+                    _ptr + _kdNodesOffset,
+                    (short*)(_ptr + _kdBlockVectorsOffset),
+                    _ptr + _kdLabelsOffset,
+                    (int*)(_ptr + _kdIdsOffset),
+                    queryPtr,
+                    _kdNodeCount,
+                    _kdMaxPartitions)
+                : NativeClassifyKdTreeAvx2(
                 _ptr + _kdPartitionsOffset,
                 _ptr + _kdNodesOffset,
                 (short*)(_ptr + _kdVectorsOffset),
@@ -766,7 +814,42 @@ internal unsafe sealed class BinaryIndex : IDisposable
             var useProfileNative = _fastPathReferenceAllowed && searchParams.ProfileFastPath && _profileCountsOffset != 0 && _profileLabelMasksOffset != 0;
             var useBucketNative = _fastPathReferenceAllowed && searchParams.BucketFastPath && _bucketCountsHandle.IsAllocated && _bucketFraudCountsHandle.IsAllocated;
             var result = useProfileNative || useBucketNative
-                ? NativeClassifyJsonProfileKdTreeAvx2(
+                ? (_useNativeKdBlockScan
+                    ? NativeClassifyJsonProfileKdTreeBlockAvx2(
+                        _ptr + _kdPartitionsOffset,
+                        _ptr + _kdNodesOffset,
+                        (short*)(_ptr + _kdBlockVectorsOffset),
+                        _ptr + _kdLabelsOffset,
+                        (int*)(_ptr + _kdIdsOffset),
+                        _bucketCountsHandle.IsAllocated ? (uint*)_bucketCountsHandle.AddrOfPinnedObject() : null,
+                        _bucketFraudCountsHandle.IsAllocated ? (uint*)_bucketFraudCountsHandle.AddrOfPinnedObject() : null,
+                        useProfileNative ? (ushort*)(_ptr + _profileCountsOffset) : null,
+                        useProfileNative ? (ushort*)(_ptr + _profileFraudCountsOffset) : null,
+                        useProfileNative ? _ptr + _profileLabelMasksOffset : null,
+                        bodyPtr,
+                        body.Length,
+                        _kdNodeCount,
+                        _kdMaxPartitions,
+                        useProfileNative ? 1 : 0,
+                        searchParams.ProfileLegitMinCount,
+                        searchParams.ProfileFraudMinCount,
+                        searchParams.ProfileFraudAmountMin,
+                        searchParams.ProfileFraudLowAmountFastPath ? 1 : 0,
+                        searchParams.ProfileFraudLowAmountKmHomeMin,
+                        searchParams.ProfileFraudLowAmountTx24hMin,
+                        searchParams.ProfileFraudMidAmountNoLastFastPath ? 1 : 0,
+                        searchParams.ProfileFraudMidAmountMin,
+                        searchParams.ProfileFraudNoLastOnly ? 1 : 0,
+                        searchParams.ProfileDominantFastPath ? 1 : 0,
+                        searchParams.ProfileDominantMinCount,
+                        searchParams.ProfileDominantMaxOpposite,
+                        searchParams.ProfileDominantLegitEnabled ? 1 : 0,
+                        searchParams.ProfileDominantFraudEnabled ? 1 : 0,
+                        useBucketNative ? 1 : 0,
+                        searchParams.BucketLegitMinCount,
+                        searchParams.BucketFraudMinCount,
+                        searchParams.BucketFraudNoLastOnly ? 1 : 0)
+                    : NativeClassifyJsonProfileKdTreeAvx2(
                     _ptr + _kdPartitionsOffset,
                     _ptr + _kdNodesOffset,
                     (short*)(_ptr + _kdVectorsOffset),
@@ -799,8 +882,19 @@ internal unsafe sealed class BinaryIndex : IDisposable
                     useBucketNative ? 1 : 0,
                     searchParams.BucketLegitMinCount,
                     searchParams.BucketFraudMinCount,
-                    searchParams.BucketFraudNoLastOnly ? 1 : 0)
-                : NativeClassifyJsonKdTreeAvx2(
+                    searchParams.BucketFraudNoLastOnly ? 1 : 0))
+                : (_useNativeKdBlockScan
+                    ? NativeClassifyJsonKdTreeBlockAvx2(
+                        _ptr + _kdPartitionsOffset,
+                        _ptr + _kdNodesOffset,
+                        (short*)(_ptr + _kdBlockVectorsOffset),
+                        _ptr + _kdLabelsOffset,
+                        (int*)(_ptr + _kdIdsOffset),
+                        bodyPtr,
+                        body.Length,
+                        _kdNodeCount,
+                        _kdMaxPartitions)
+                    : NativeClassifyJsonKdTreeAvx2(
                     _ptr + _kdPartitionsOffset,
                     _ptr + _kdNodesOffset,
                     (short*)(_ptr + _kdVectorsOffset),
@@ -809,7 +903,7 @@ internal unsafe sealed class BinaryIndex : IDisposable
                     bodyPtr,
                     body.Length,
                     _kdNodeCount,
-                    _kdMaxPartitions);
+                    _kdMaxPartitions));
             if (result < 0)
             {
                 return false;
@@ -824,6 +918,11 @@ internal unsafe sealed class BinaryIndex : IDisposable
     private int ClassifyNativeKdWithStats(ReadOnlySpan<short> query, Span<int> stats)
     {
         stats.Clear();
+        if (_useNativeKdBlockScan)
+        {
+            return ClassifyNativeKd(query);
+        }
+
         if (query.Length >= KdVectorStride)
         {
             fixed (short* queryPtr = query)
@@ -2626,6 +2725,10 @@ internal unsafe sealed class BinaryIndex : IDisposable
                     sections.BuildInfoOffset = offset;
                     sections.BuildInfoLength = length;
                     break;
+                case SectionKdBlockVectors:
+                    sections.KdBlockVectorsOffset = offset;
+                    sections.KdBlockVectorsLength = length;
+                    break;
             }
         }
 
@@ -3100,6 +3203,8 @@ internal unsafe sealed class BinaryIndex : IDisposable
         public long KdLabelsLength;
         public long KdIdsOffset;
         public long KdIdsLength;
+        public long KdBlockVectorsOffset;
+        public long KdBlockVectorsLength;
         public long BuildInfoOffset;
         public long BuildInfoLength;
     }
@@ -3131,6 +3236,18 @@ internal unsafe sealed class BinaryIndex : IDisposable
         int nodeCount,
         int maxPartitions);
 
+    [DllImport("rinha_native", EntryPoint = "rinha_classify_kdtree_block_avx2")]
+    [SuppressGCTransition]
+    private static extern int NativeClassifyKdTreeBlockAvx2(
+        byte* partitions,
+        byte* nodes,
+        short* blockVectors,
+        byte* labels,
+        int* ids,
+        short* query,
+        int nodeCount,
+        int maxPartitions);
+
     [DllImport("rinha_native", EntryPoint = "rinha_classify_json_kdtree_avx2")]
     [SuppressGCTransition]
     private static extern int NativeClassifyJsonKdTreeAvx2(
@@ -3144,12 +3261,62 @@ internal unsafe sealed class BinaryIndex : IDisposable
         int nodeCount,
         int maxPartitions);
 
+    [DllImport("rinha_native", EntryPoint = "rinha_classify_json_kdtree_block_avx2")]
+    [SuppressGCTransition]
+    private static extern int NativeClassifyJsonKdTreeBlockAvx2(
+        byte* partitions,
+        byte* nodes,
+        short* blockVectors,
+        byte* labels,
+        int* ids,
+        byte* body,
+        int bodyLength,
+        int nodeCount,
+        int maxPartitions);
+
     [DllImport("rinha_native", EntryPoint = "rinha_classify_json_profile_kdtree_avx2")]
     [SuppressGCTransition]
     private static extern int NativeClassifyJsonProfileKdTreeAvx2(
         byte* partitions,
         byte* nodes,
         short* vectors,
+        byte* labels,
+        int* ids,
+        uint* bucketCounts,
+        uint* bucketFraudCounts,
+        ushort* profileCounts,
+        ushort* profileFraudCounts,
+        byte* profileMasks,
+        byte* body,
+        int bodyLength,
+        int nodeCount,
+        int maxPartitions,
+        int profileFastPath,
+        int profileLegitMinCount,
+        int profileFraudMinCount,
+        int profileFraudAmountMin,
+        int profileFraudLowAmountFastPath,
+        int profileFraudLowAmountKmHomeMin,
+        int profileFraudLowAmountTx24hMin,
+        int profileFraudMidAmountNoLastFastPath,
+        int profileFraudMidAmountMin,
+        int profileFraudNoLastOnly,
+        int profileDominantFastPath,
+        int profileDominantMinCount,
+        int profileDominantMaxOpposite,
+        int profileDominantLegitEnabled,
+        int profileDominantFraudEnabled,
+        int bucketFastPath,
+        int bucketLegitMinCount,
+        int bucketFraudMinCount,
+        int bucketFraudNoLastOnly);
+
+    [DllImport("rinha_native", EntryPoint = "rinha_classify_json_profile_kdtree_block_avx2")]
+    [SuppressGCTransition]
+    private static extern int NativeClassifyJsonProfileKdTreeBlockAvx2(
+        byte* partitions,
+        byte* nodes,
+        short* blockVectors,
         byte* labels,
         int* ids,
         uint* bucketCounts,

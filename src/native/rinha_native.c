@@ -12,6 +12,8 @@
 #define K 5
 #define KD_PARTITION_COUNT 256
 #define KD_VECTOR_STRIDE 16
+#define KD_BLOCK_LANES 8
+#define KD_BLOCK_VECTOR_STRIDE (DIM * KD_BLOCK_LANES)
 #define KD_PARTITION_RECORD_SIZE 72
 #define KD_NODE_RECORD_SIZE 80
 #define KD_STACK_SIZE 128
@@ -749,6 +751,214 @@ static void kd_search_node_best_first(
             if (right_bound <= top_dist[K - 1]) {
                 if (heap_count >= KD_NODE_QUEUE_SIZE) {
                     kd_search_node(nodes, vectors, labels, ids, node_count, query, root, top_dist, top_label, top_id);
+                    return;
+                }
+
+                kd_node_heap_push(heap, &heap_count, right, right_bound);
+            }
+        }
+    }
+}
+#endif
+
+static inline int64_t distance_kd_block_lane_scalar(const int16_t *block_vectors, int pos, const int16_t *query) {
+    int block = pos / KD_BLOCK_LANES;
+    int lane = pos & (KD_BLOCK_LANES - 1);
+    const int16_t *base = block_vectors + (int64_t)block * KD_BLOCK_VECTOR_STRIDE;
+    int64_t sum = 0;
+    for (int dim = 0; dim < DIM; dim++) {
+        int64_t diff = (int64_t)query[dim] - base[(dim >> 1) * KD_BLOCK_LANES * 2 + lane * 2 + (dim & 1)];
+        sum += diff * diff;
+    }
+
+    return sum;
+}
+
+static inline void distance_kd_block8_avx2(const int16_t *block, const int16_t *query, int32_t *dist) {
+    __m256i acc = _mm256_setzero_si256();
+    for (int pair = 0; pair < DIM / 2; pair++) {
+        uint32_t lo = (uint16_t)query[pair * 2];
+        uint32_t hi = (uint16_t)query[pair * 2 + 1];
+        __m256i q = _mm256_set1_epi32((int)(lo | (hi << 16)));
+        __m256i refs = _mm256_loadu_si256((const __m256i *)(block + pair * KD_BLOCK_LANES * 2));
+        __m256i diff = _mm256_sub_epi16(q, refs);
+        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(diff, diff));
+    }
+
+    _mm256_storeu_si256((__m256i *)dist, acc);
+}
+
+static void kd_scan_leaf_block(
+    const int16_t *block_vectors,
+    const uint8_t *labels,
+    const int32_t *ids,
+    const int16_t *query,
+    int start,
+    int count,
+    int64_t *top_dist,
+    uint8_t *top_label,
+    int32_t *top_id) {
+    int pos = start;
+    int end = start + count;
+
+    while (pos < end && (pos & (KD_BLOCK_LANES - 1)) != 0) {
+        int64_t dist = distance_kd_block_lane_scalar(block_vectors, pos, query);
+        int32_t id = ids[pos];
+        if (kd_candidate_better(dist, id, K - 1, top_dist, top_id)) {
+            kd_insert_candidate(dist, labels[pos], id, top_dist, top_label, top_id);
+        }
+        pos++;
+    }
+
+    while (pos + KD_BLOCK_LANES <= end) {
+        int32_t dists[KD_BLOCK_LANES];
+        const int16_t *block = block_vectors + ((int64_t)pos / KD_BLOCK_LANES) * KD_BLOCK_VECTOR_STRIDE;
+        distance_kd_block8_avx2(block, query, dists);
+        for (int lane = 0; lane < KD_BLOCK_LANES; lane++) {
+            int64_t dist = dists[lane];
+            int id_pos = pos + lane;
+            int32_t id = ids[id_pos];
+            if (kd_candidate_better(dist, id, K - 1, top_dist, top_id)) {
+                kd_insert_candidate(dist, labels[id_pos], id, top_dist, top_label, top_id);
+            }
+        }
+        pos += KD_BLOCK_LANES;
+    }
+
+    while (pos < end) {
+        int64_t dist = distance_kd_block_lane_scalar(block_vectors, pos, query);
+        int32_t id = ids[pos];
+        if (kd_candidate_better(dist, id, K - 1, top_dist, top_id)) {
+            kd_insert_candidate(dist, labels[pos], id, top_dist, top_label, top_id);
+        }
+        pos++;
+    }
+}
+
+static void kd_search_node_block(
+    const uint8_t *nodes,
+    const int16_t *block_vectors,
+    const uint8_t *labels,
+    const int32_t *ids,
+    int node_count,
+    const int16_t *query,
+    int root,
+    int64_t *top_dist,
+    uint8_t *top_label,
+    int32_t *top_id) {
+    int stack[KD_STACK_SIZE];
+    int sp = 0;
+    if (root >= 0) {
+        stack[sp++] = root;
+    }
+
+    while (sp > 0) {
+        int node_index = stack[--sp];
+        if (node_index < 0 || node_index >= node_count) {
+            continue;
+        }
+
+        const uint8_t *node = kd_node_ptr(nodes, node_index);
+        const int16_t *min = (const int16_t *)(node + 16);
+        const int16_t *max = (const int16_t *)(node + 48);
+        int64_t bound = kd_bounds_lower_bound(query, min, max);
+        if (bound > top_dist[K - 1]) {
+            continue;
+        }
+
+        int left = kd_rd32s(node);
+        int right = kd_rd32s(node + 4);
+        int start = kd_rd32s(node + 8);
+        int count = kd_rd32s(node + 12);
+        if (left < 0 && right < 0) {
+            kd_scan_leaf_block(block_vectors, labels, ids, query, start, count, top_dist, top_label, top_id);
+            continue;
+        }
+
+        const uint8_t *left_node = left >= 0 ? kd_node_ptr(nodes, left) : 0;
+        const uint8_t *right_node = right >= 0 ? kd_node_ptr(nodes, right) : 0;
+        int64_t left_bound = left_node != 0
+            ? kd_bounds_lower_bound(query, (const int16_t *)(left_node + 16), (const int16_t *)(left_node + 48))
+            : INT64_MAX;
+        int64_t right_bound = right_node != 0
+            ? kd_bounds_lower_bound(query, (const int16_t *)(right_node + 16), (const int16_t *)(right_node + 48))
+            : INT64_MAX;
+
+        if (left_bound <= right_bound) {
+            if (right_bound <= top_dist[K - 1] && sp < KD_STACK_SIZE) stack[sp++] = right;
+            if (left_bound <= top_dist[K - 1] && sp < KD_STACK_SIZE) stack[sp++] = left;
+        } else {
+            if (left_bound <= top_dist[K - 1] && sp < KD_STACK_SIZE) stack[sp++] = left;
+            if (right_bound <= top_dist[K - 1] && sp < KD_STACK_SIZE) stack[sp++] = right;
+        }
+    }
+}
+
+#if KD_BEST_FIRST
+static void kd_search_node_best_first_block(
+    const uint8_t *nodes,
+    const int16_t *block_vectors,
+    const uint8_t *labels,
+    const int32_t *ids,
+    int node_count,
+    const int16_t *query,
+    int root,
+    int64_t *top_dist,
+    uint8_t *top_label,
+    int32_t *top_id) {
+    if (root < 0 || root >= node_count) {
+        return;
+    }
+
+    kd_node_candidate_t heap[KD_NODE_QUEUE_SIZE];
+    int heap_count = 0;
+    const uint8_t *root_node = kd_node_ptr(nodes, root);
+    kd_node_heap_push(
+        heap,
+        &heap_count,
+        root,
+        kd_bounds_lower_bound(query, (const int16_t *)(root_node + 16), (const int16_t *)(root_node + 48)));
+
+    while (heap_count > 0) {
+        kd_node_candidate_t current = kd_node_heap_pop(heap, &heap_count);
+        if (current.bound > top_dist[K - 1]) {
+            break;
+        }
+
+        int node_index = current.node;
+        if (node_index < 0 || node_index >= node_count) {
+            continue;
+        }
+
+        const uint8_t *node = kd_node_ptr(nodes, node_index);
+        int left = kd_rd32s(node);
+        int right = kd_rd32s(node + 4);
+        int start = kd_rd32s(node + 8);
+        int count = kd_rd32s(node + 12);
+        if (left < 0 && right < 0) {
+            kd_scan_leaf_block(block_vectors, labels, ids, query, start, count, top_dist, top_label, top_id);
+            continue;
+        }
+
+        if (left >= 0) {
+            const uint8_t *left_node = kd_node_ptr(nodes, left);
+            int64_t left_bound = kd_bounds_lower_bound(query, (const int16_t *)(left_node + 16), (const int16_t *)(left_node + 48));
+            if (left_bound <= top_dist[K - 1]) {
+                if (heap_count >= KD_NODE_QUEUE_SIZE) {
+                    kd_search_node_block(nodes, block_vectors, labels, ids, node_count, query, root, top_dist, top_label, top_id);
+                    return;
+                }
+
+                kd_node_heap_push(heap, &heap_count, left, left_bound);
+            }
+        }
+
+        if (right >= 0) {
+            const uint8_t *right_node = kd_node_ptr(nodes, right);
+            int64_t right_bound = kd_bounds_lower_bound(query, (const int16_t *)(right_node + 16), (const int16_t *)(right_node + 48));
+            if (right_bound <= top_dist[K - 1]) {
+                if (heap_count >= KD_NODE_QUEUE_SIZE) {
+                    kd_search_node_block(nodes, block_vectors, labels, ids, node_count, query, root, top_dist, top_label, top_id);
                     return;
                 }
 
@@ -1600,6 +1810,83 @@ int32_t rinha_classify_kdtree_avx2(
 }
 
 __attribute__((visibility("default")))
+int32_t rinha_classify_kdtree_block_avx2(
+    const uint8_t *partitions,
+    const uint8_t *nodes,
+    const int16_t *block_vectors,
+    const uint8_t *labels,
+    const int32_t *ids,
+    const int16_t *query,
+    int32_t node_count,
+    int32_t max_partitions) {
+    int64_t top_dist[K] = {INT64_MAX, INT64_MAX, INT64_MAX, INT64_MAX, INT64_MAX};
+    uint8_t top_label[K] = {0, 0, 0, 0, 0};
+    int32_t top_id[K] = {INT_MAX, INT_MAX, INT_MAX, INT_MAX, INT_MAX};
+
+    if (max_partitions <= 0 || max_partitions > KD_PARTITION_COUNT) {
+        max_partitions = KD_PARTITION_COUNT;
+    }
+
+    int primary = kd_partition_key(query);
+    const uint8_t *primary_partition = kd_partition_ptr(partitions, primary);
+    int primary_root = kd_rd32s(primary_partition);
+    if (primary_root >= 0) {
+#if KD_BEST_FIRST
+        kd_search_node_best_first_block(nodes, block_vectors, labels, ids, node_count, query, primary_root, top_dist, top_label, top_id);
+#else
+        kd_search_node_block(nodes, block_vectors, labels, ids, node_count, query, primary_root, top_dist, top_label, top_id);
+#endif
+    }
+
+    int searched_partitions = 1;
+    if (searched_partitions >= max_partitions) {
+        return kd_count_frauds(top_label);
+    }
+
+    kd_partition_candidate_t candidates[KD_PARTITION_COUNT];
+    int candidate_count = 0;
+    for (int partition = 0; partition < KD_PARTITION_COUNT; partition++) {
+        if (partition == primary) {
+            continue;
+        }
+
+        const uint8_t *record = kd_partition_ptr(partitions, partition);
+        int root = kd_rd32s(record);
+        int count = kd_rd32s(record + 4);
+        if (root < 0 || count <= 0) {
+            continue;
+        }
+
+        int64_t bound = kd_bounds_lower_bound(
+            query,
+            (const int16_t *)(record + 8),
+            (const int16_t *)(record + 40));
+        if (bound <= top_dist[K - 1]) {
+            kd_insert_partition_candidate(candidates, &candidate_count, partition, bound);
+        }
+    }
+
+    for (int i = 0; i < candidate_count; i++) {
+        if (candidates[i].bound > top_dist[K - 1]) {
+            break;
+        }
+
+        const uint8_t *record = kd_partition_ptr(partitions, candidates[i].index);
+#if KD_BEST_FIRST
+        kd_search_node_best_first_block(nodes, block_vectors, labels, ids, node_count, query, kd_rd32s(record), top_dist, top_label, top_id);
+#else
+        kd_search_node_block(nodes, block_vectors, labels, ids, node_count, query, kd_rd32s(record), top_dist, top_label, top_id);
+#endif
+        searched_partitions++;
+        if (searched_partitions >= max_partitions) {
+            break;
+        }
+    }
+
+    return kd_count_frauds(top_label);
+}
+
+__attribute__((visibility("default")))
 int32_t rinha_classify_json_kdtree_avx2(
     const uint8_t *partitions,
     const uint8_t *nodes,
@@ -1619,6 +1906,33 @@ int32_t rinha_classify_json_kdtree_avx2(
         partitions,
         nodes,
         vectors,
+        labels,
+        ids,
+        query,
+        node_count,
+        max_partitions);
+}
+
+__attribute__((visibility("default")))
+int32_t rinha_classify_json_kdtree_block_avx2(
+    const uint8_t *partitions,
+    const uint8_t *nodes,
+    const int16_t *block_vectors,
+    const uint8_t *labels,
+    const int32_t *ids,
+    const uint8_t *body,
+    int32_t body_length,
+    int32_t node_count,
+    int32_t max_partitions) {
+    int16_t query[KD_VECTOR_STRIDE];
+    if (body == 0 || body_length <= 0 || !json_build_query_ordered(body, body_length, query)) {
+        return -1;
+    }
+
+    return rinha_classify_kdtree_block_avx2(
+        partitions,
+        nodes,
+        block_vectors,
         labels,
         ids,
         query,
@@ -1731,6 +2045,118 @@ int32_t rinha_classify_json_profile_kdtree_avx2(
         partitions,
         nodes,
         vectors,
+        labels,
+        ids,
+        query,
+        node_count,
+        max_partitions);
+}
+
+__attribute__((visibility("default")))
+int32_t rinha_classify_json_profile_kdtree_block_avx2(
+    const uint8_t *partitions,
+    const uint8_t *nodes,
+    const int16_t *block_vectors,
+    const uint8_t *labels,
+    const int32_t *ids,
+    const uint32_t *bucket_counts,
+    const uint32_t *bucket_fraud_counts,
+    const uint16_t *profile_counts,
+    const uint16_t *profile_fraud_counts,
+    const uint8_t *profile_masks,
+    const uint8_t *body,
+    int32_t body_length,
+    int32_t node_count,
+    int32_t max_partitions,
+    int32_t profile_fastpath,
+    int32_t profile_legit_min_count,
+    int32_t profile_fraud_min_count,
+    int32_t profile_fraud_amount_min,
+    int32_t profile_fraud_low_amount_fastpath,
+    int32_t profile_fraud_low_amount_km_home_min,
+    int32_t profile_fraud_low_amount_tx24h_min,
+    int32_t profile_fraud_mid_amount_no_last_fastpath,
+    int32_t profile_fraud_mid_amount_min,
+    int32_t profile_fraud_no_last_only,
+    int32_t profile_dominant_fastpath,
+    int32_t profile_dominant_min_count,
+    int32_t profile_dominant_max_opposite,
+    int32_t profile_dominant_legit_enabled,
+    int32_t profile_dominant_fraud_enabled,
+    int32_t bucket_fastpath,
+    int32_t bucket_legit_min_count,
+    int32_t bucket_fraud_min_count,
+    int32_t bucket_fraud_no_last_only) {
+    int16_t query[KD_VECTOR_STRIDE];
+    if (body == 0 || body_length <= 0 || !json_build_query_ordered(body, body_length, query)) {
+        return -1;
+    }
+
+    if (profile_fastpath && profile_counts != 0 && profile_masks != 0) {
+        int key = profile_key(query);
+        uint8_t mask = profile_masks[key];
+        uint16_t count = profile_counts[key];
+        if (mask == PROFILE_LEGIT_MASK && count >= profile_legit_min_count) {
+            return 0;
+        }
+
+        int profile_fraud_amount_allowed =
+            query[0] >= profile_fraud_amount_min ||
+            (profile_fraud_mid_amount_no_last_fastpath &&
+             query[0] >= profile_fraud_mid_amount_min &&
+             query[5] < 0) ||
+            (profile_fraud_low_amount_fastpath &&
+             ((query[7] >= profile_fraud_low_amount_km_home_min &&
+               query[8] >= profile_fraud_low_amount_tx24h_min) ||
+              query[7] >= 5500 ||
+              query[8] >= 6250));
+        if (mask == PROFILE_FRAUD_MASK &&
+            count >= profile_fraud_min_count &&
+            profile_fraud_amount_allowed &&
+            (!profile_fraud_no_last_only || query[5] < 0)) {
+            return K;
+        }
+
+        if (profile_dominant_fastpath && profile_fraud_counts != 0) {
+            uint16_t frauds = profile_fraud_counts[key];
+            int legits = (int)count - (int)frauds;
+            if (legits < 0) {
+                legits = 0;
+            }
+
+            if (profile_dominant_fraud_enabled &&
+                frauds >= profile_dominant_min_count &&
+                legits <= profile_dominant_max_opposite &&
+                profile_fraud_amount_allowed &&
+                (!profile_fraud_no_last_only || query[5] < 0)) {
+                return K;
+            }
+
+            if (profile_dominant_legit_enabled &&
+                legits >= profile_dominant_min_count &&
+                frauds <= profile_dominant_max_opposite) {
+                return 0;
+            }
+        }
+    }
+
+    if (bucket_fastpath) {
+        int decision = bucket_fast_decision(
+            bucket_counts,
+            bucket_fraud_counts,
+            query,
+            bucket_legit_min_count,
+            bucket_fraud_min_count,
+            bucket_fraud_no_last_only);
+        if (decision >= 0) {
+            return decision;
+        }
+    }
+
+    return rinha_classify_kdtree_block_avx2(
+        partitions,
+        nodes,
+        block_vectors,
         labels,
         ids,
         query,

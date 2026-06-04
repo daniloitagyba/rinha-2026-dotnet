@@ -170,7 +170,6 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${SOCKETS_MOUNT:-}" ] || \
    [ -n "${API_ENTRYPOINT:-}" ] || \
    [ -n "${WORKERS:-}" ] || \
-   [ -n "${NATIVE_WORKERS:-}" ] || \
    [ -n "${FD_RECEIVERS:-}" ] || \
    [ -n "${FD_RAW:-}" ] || \
    [ -n "${FD_DEDICATED_THREADS:-}" ] || \
@@ -182,7 +181,6 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
    [ -n "${FD_EPOLL_TIMEOUT_MS:-}" ] || \
    [ -n "${FD_EPOLL_TIMEOUT_US:-}" ] || \
    [ -n "${FD_EPOLL_SPIN_US:-}" ] || \
-   [ -n "${NATIVE_EPOLL:-}" ] || \
    [ -n "${FD_IMMEDIATE_READ:-}" ] || \
    [ -n "${FD_PRE_READ:-}" ] || \
    [ -n "${ASSUME_BODY_COMPLETE:-}" ] || \
@@ -332,7 +330,6 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${KDTREE_BLOCK_SCAN:-}" ] && echo "      KDTREE_BLOCK_SCAN: \"$KDTREE_BLOCK_SCAN\""
       [ -n "${BLOCK_SCAN:-}" ] && echo "      BLOCK_SCAN: \"$BLOCK_SCAN\""
       [ -n "${WORKERS:-}" ] && echo "      WORKERS: \"$WORKERS\""
-      [ -n "${NATIVE_WORKERS:-}" ] && echo "      NATIVE_WORKERS: \"$NATIVE_WORKERS\""
       [ -n "${FD_RECEIVERS:-}" ] && echo "      FD_RECEIVERS: \"$FD_RECEIVERS\""
       [ -n "${FD_RAW:-}" ] && echo "      FD_RAW: \"$FD_RAW\""
       [ -n "${FD_DEDICATED_THREADS:-}" ] && echo "      FD_DEDICATED_THREADS: \"$FD_DEDICATED_THREADS\""
@@ -344,7 +341,6 @@ if [ -n "${EARLY_CANDIDATES:-}" ] || \
       [ -n "${FD_EPOLL_TIMEOUT_MS:-}" ] && echo "      FD_EPOLL_TIMEOUT_MS: \"$FD_EPOLL_TIMEOUT_MS\""
       [ -n "${FD_EPOLL_TIMEOUT_US:-}" ] && echo "      FD_EPOLL_TIMEOUT_US: \"$FD_EPOLL_TIMEOUT_US\""
       [ -n "${FD_EPOLL_SPIN_US:-}" ] && echo "      FD_EPOLL_SPIN_US: \"$FD_EPOLL_SPIN_US\""
-      [ -n "${NATIVE_EPOLL:-}" ] && echo "      NATIVE_EPOLL: \"$NATIVE_EPOLL\""
       [ -n "${FD_IMMEDIATE_READ:-}" ] && echo "      FD_IMMEDIATE_READ: \"$FD_IMMEDIATE_READ\""
       [ -n "${FD_PRE_READ:-}" ] && echo "      FD_PRE_READ: \"$FD_PRE_READ\""
       [ -n "${ASSUME_BODY_COMPLETE:-}" ] && echo "      ASSUME_BODY_COMPLETE: \"$ASSUME_BODY_COMPLETE\""

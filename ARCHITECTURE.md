@@ -34,8 +34,6 @@ or inspect payload fields for fraud decisions.
 - `src/RinhaFraud/`: `.NET` API, CLI, index builder, self-test, eval and
   integration with native search.
 - `src/native/rinha_native.c`: native search library loaded by `.NET`.
-- `src/native/rinha_native_api.c`: standalone native API binary kept for
-  experiments/validation; not the current API entrypoint.
 - `src/lb/rinha-lb.c`: C load balancer.
 - `resources/references.json.gz`: official references used to build the binary
   index.

@@ -17,7 +17,6 @@ RUN mkdir -p /out/lb \
 ARG KDTREE_KEY_PROFILE=0
 RUN mkdir -p /out/native \
     && clang -O3 -DNDEBUG -march=haswell -mtune=haswell $NATIVE_CFLAGS_EXTRA -DKDTREE_KEY_PROFILE="$KDTREE_KEY_PROFILE" -fPIC -shared -o /out/native/librinha_native.so src/native/rinha_native.c
-RUN clang -O3 -DNDEBUG -march=haswell -mtune=haswell $NATIVE_CFLAGS_EXTRA -DKDTREE_KEY_PROFILE="$KDTREE_KEY_PROFILE" -pthread -o /out/native/rinha-native-api src/native/rinha_native_api.c src/native/rinha_native.c
 ARG BUILD_BLOCK_INDEX=0
 ARG BUILD_NATIVE_ONLY_INDEX=1
 ARG BUILD_KDTREE_INDEX=1
@@ -46,7 +45,6 @@ WORKDIR /app
 COPY --from=builder /out/app/RinhaFraud /usr/local/bin/rinha-fraud
 COPY --from=builder /out/lb/rinha-lb /usr/local/bin/rinha-lb
 COPY --from=builder /out/native/librinha_native.so /usr/local/lib/librinha_native.so
-COPY --from=builder /out/native/rinha-native-api /usr/local/bin/rinha-native-api
 COPY --from=builder /out/data /app/data
 
 ENV LD_LIBRARY_PATH=/usr/local/lib

@@ -1,18 +1,10 @@
 services:
   lb:
-    image: ghcr.io/daniloitagyba/rinha-2026-rust:fbf0efde8fb8ba4b7e1622524ad902dec18ee9c9
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:65d63900ec49a2b53c02fdd07007499d121437cd
     platform: linux/amd64
-    cpuset: "2,3"
     entrypoint: ["rinha-lb"]
     environment:
       LB_MODE: fdpass
-      FD_CONTROL_SEQPACKET: "${FD_CONTROL_SEQPACKET:-1}"
-      LB_PRECONNECT_CONTROL: "1"
-      LB_ACCEPT_BATCH: "${LB_ACCEPT_BATCH:-64}"
-      LB_BACKLOG: "65535"
-      LB_SENDMSG_DONTWAIT: "${LB_SENDMSG_DONTWAIT:-1}"
-      TCP_DEFER_ACCEPT: "1"
-      UPSTREAMS: /sockets/api1.sock.ctrl,/sockets/api2.sock.ctrl
     ports:
       - "9999:9999"
     volumes:
@@ -27,49 +19,50 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "${LB_CPUS:-0.20}"
-          memory: "20MB"
+          cpus: "0.12"
+          memory: "32MB"
 
   api1:
-    image: ghcr.io/daniloitagyba/rinha-2026-rust:fbf0efde8fb8ba4b7e1622524ad902dec18ee9c9
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:65d63900ec49a2b53c02fdd07007499d121437cd
     platform: linux/amd64
-    cpuset: "0"
+    entrypoint: ["rinha-fraud", "serve"]
     environment:
       BIND_ADDR: fd:/sockets/api1.sock.ctrl
-      FD_CONTROL_SEQPACKET: "${FD_CONTROL_SEQPACKET:-1}"
-      FD_EPOLL_RAW: "1"
-      FD_EPOLL_SPIN_US: "${FD_EPOLL_SPIN_US:-0}"
-      FD_EPOLL_IDLE_US: "${FD_EPOLL_IDLE_US:-60}"
-      FD_EPOLL_BUSY_POLL_US: "${FD_EPOLL_BUSY_POLL_US:-100}"
-      FD_EPOLL_BUSY_POLL_BUDGET: "${FD_EPOLL_BUSY_POLL_BUDGET:-8}"
-      FD_EPOLL_PREFER_BUSY_POLL: "${FD_EPOLL_PREFER_BUSY_POLL:-1}"
-      FD_CONN_POOL_CAP: "${FD_CONN_POOL_CAP:-512}"
       INDEX_PATH: /app/data/references.idx
-      INDEX_HUGE: "${INDEX_HUGE:-1}"
       INDEX_HUGEPAGES: "1"
-      INDEX_MLOCK: "${INDEX_MLOCK:-1}"
-      INDEX_REPORT_HUGEPAGES: "${INDEX_REPORT_HUGEPAGES:-1}"
-      PREFETCH_INDEX: "true"
-      API_WARMUP_QUERIES: "${API_WARMUP_QUERIES:-4096}"
-      API_WARMUP_JITTER: "${API_WARMUP_JITTER:-512}"
-      WORKERS: "${API_WORKERS:-1}"
-      KEEP_ALIVE_REQUESTS: "${KEEP_ALIVE_REQUESTS:-100000}"
-      EARLY_CANDIDATES: "9000"
-      MIN_CANDIDATES: "9000"
-      MAX_CANDIDATES: "18000"
+      SERVER_MODE: raw-async
+      FD_RAW: "1"
+      FD_EPOLL: "1"
+      FD_EPOLL_TIMEOUT_MS: "1"
+      FD_EPOLL_TIMEOUT_US: "200"
+      CLASSIFIER_PREWARM: "64"
+      TP_PREWARM: "64"
+      TP_MIN_THREADS: "64"
+      TP_MIN_IO_THREADS: "4"
+      WORKERS: "2"
+      EARLY_CANDIDATES: "9800"
+      MIN_CANDIDATES: "9800"
+      MAX_CANDIDATES: "11000"
       PROFILE_FASTPATH: "1"
       PROFILE_FASTPATH_REFERENCE_SHA256: "43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67"
       EXPECTED_REFERENCES_GZIP_SHA256: "43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67"
       PROFILE_MIN_COUNT: "15"
       PROFILE_LEGIT_MIN_COUNT: "15"
-      PROFILE_FRAUD_MIN_COUNT: "200"
+      PROFILE_FRAUD_MIN_COUNT: "8"
+      PROFILE_FRAUD_AMOUNT_MIN: "4000"
+      PROFILE_FRAUD_LOW_AMOUNT_FASTPATH: "1"
       PROFILE_DOMINANT_FASTPATH: "0"
       PROFILE_DOMINANT_MIN_COUNT: "15"
       PROFILE_DOMINANT_MAX_OPPOSITE: "2"
+      BUCKET_FASTPATH: "0"
+      ASSUME_BODY_COMPLETE: "1"
+      ASSUME_FRAUD_SCORE_PATH: "1"
+      ASSUME_JSON_BODY_START: "1"
+      FASTPATH_CANARY_REQUESTS: "0"
+      FASTPATH_CANARY_INTERVAL: "0"
       EXACT_FALLBACK: "risky"
-      RISKY_SEMANTIC_GROUPS: "1"
-      RISKY_SEMANTIC_RADIUS: "2"
       EARLY_EDGE_FALLBACK: "1"
+      RISKY_BUCKETS: "1"
       RISKY_AMOUNT_MIN: "400"
       RISKY_AMOUNT_MAX: "3000"
       RISKY_INSTALLMENTS_MIN: "2200"
@@ -79,67 +72,62 @@ services:
       RISKY_KM_HOME_MAX: "4000"
       RISKY_TX24H_MAX: "5800"
       RISKY_MERCHANT_AVG_MAX: "420"
-      OVERLOAD_MIN_CANDIDATES: "3000"
-      OVERLOAD_MAX_CANDIDATES: "32400"
-      OVERLOAD_THRESHOLD: "0"
-      OVERLOAD_FAST_ONLY: "true"
-      SEARCH_FALLBACK_LAST_DISTANCE: "2900"
-      FAST_PATH: "false"
+      RISKY_NATIVE_FINE: "1"
+      KDTREE_NATIVE: "1"
+      DOTNET_EnableDiagnostics: "0"
     volumes:
       - backend-sockets:/sockets
     ulimits:
       nofile:
         soft: 65535
         hard: 65535
-      memlock:
-        soft: -1
-        hard: -1
     deploy:
       resources:
         limits:
-          cpus: "${API_CPUS:-0.40}"
-          memory: "162MB"
+          cpus: "0.44"
+          memory: "156MB"
 
   api2:
-    image: ghcr.io/daniloitagyba/rinha-2026-rust:fbf0efde8fb8ba4b7e1622524ad902dec18ee9c9
+    image: ghcr.io/daniloitagyba/rinha-2026-dotnet-tcp:65d63900ec49a2b53c02fdd07007499d121437cd
     platform: linux/amd64
-    cpuset: "1"
+    entrypoint: ["rinha-fraud", "serve"]
     environment:
       BIND_ADDR: fd:/sockets/api2.sock.ctrl
-      FD_CONTROL_SEQPACKET: "${FD_CONTROL_SEQPACKET:-1}"
-      FD_EPOLL_RAW: "1"
-      FD_EPOLL_SPIN_US: "${FD_EPOLL_SPIN_US:-0}"
-      FD_EPOLL_IDLE_US: "${FD_EPOLL_IDLE_US:-60}"
-      FD_EPOLL_BUSY_POLL_US: "${FD_EPOLL_BUSY_POLL_US:-100}"
-      FD_EPOLL_BUSY_POLL_BUDGET: "${FD_EPOLL_BUSY_POLL_BUDGET:-8}"
-      FD_EPOLL_PREFER_BUSY_POLL: "${FD_EPOLL_PREFER_BUSY_POLL:-1}"
-      FD_CONN_POOL_CAP: "${FD_CONN_POOL_CAP:-512}"
       INDEX_PATH: /app/data/references.idx
-      INDEX_HUGE: "${INDEX_HUGE:-1}"
       INDEX_HUGEPAGES: "1"
-      INDEX_MLOCK: "${INDEX_MLOCK:-1}"
-      INDEX_REPORT_HUGEPAGES: "${INDEX_REPORT_HUGEPAGES:-1}"
-      PREFETCH_INDEX: "true"
-      API_WARMUP_QUERIES: "${API_WARMUP_QUERIES:-4096}"
-      API_WARMUP_JITTER: "${API_WARMUP_JITTER:-512}"
-      WORKERS: "${API_WORKERS:-1}"
-      KEEP_ALIVE_REQUESTS: "${KEEP_ALIVE_REQUESTS:-100000}"
-      EARLY_CANDIDATES: "9000"
-      MIN_CANDIDATES: "9000"
-      MAX_CANDIDATES: "18000"
+      SERVER_MODE: raw-async
+      FD_RAW: "1"
+      FD_EPOLL: "1"
+      FD_EPOLL_TIMEOUT_MS: "1"
+      FD_EPOLL_TIMEOUT_US: "200"
+      CLASSIFIER_PREWARM: "64"
+      TP_PREWARM: "64"
+      TP_MIN_THREADS: "64"
+      TP_MIN_IO_THREADS: "4"
+      WORKERS: "2"
+      EARLY_CANDIDATES: "9800"
+      MIN_CANDIDATES: "9800"
+      MAX_CANDIDATES: "11000"
       PROFILE_FASTPATH: "1"
       PROFILE_FASTPATH_REFERENCE_SHA256: "43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67"
       EXPECTED_REFERENCES_GZIP_SHA256: "43d10de80609e77ce25740f375607afce7561ec44da50c27c142493db8fcab67"
       PROFILE_MIN_COUNT: "15"
       PROFILE_LEGIT_MIN_COUNT: "15"
-      PROFILE_FRAUD_MIN_COUNT: "200"
+      PROFILE_FRAUD_MIN_COUNT: "8"
+      PROFILE_FRAUD_AMOUNT_MIN: "4000"
+      PROFILE_FRAUD_LOW_AMOUNT_FASTPATH: "1"
       PROFILE_DOMINANT_FASTPATH: "0"
       PROFILE_DOMINANT_MIN_COUNT: "15"
       PROFILE_DOMINANT_MAX_OPPOSITE: "2"
+      BUCKET_FASTPATH: "0"
+      ASSUME_BODY_COMPLETE: "1"
+      ASSUME_FRAUD_SCORE_PATH: "1"
+      ASSUME_JSON_BODY_START: "1"
+      FASTPATH_CANARY_REQUESTS: "0"
+      FASTPATH_CANARY_INTERVAL: "0"
       EXACT_FALLBACK: "risky"
-      RISKY_SEMANTIC_GROUPS: "1"
-      RISKY_SEMANTIC_RADIUS: "2"
       EARLY_EDGE_FALLBACK: "1"
+      RISKY_BUCKETS: "1"
       RISKY_AMOUNT_MIN: "400"
       RISKY_AMOUNT_MAX: "3000"
       RISKY_INSTALLMENTS_MIN: "2200"
@@ -149,26 +137,20 @@ services:
       RISKY_KM_HOME_MAX: "4000"
       RISKY_TX24H_MAX: "5800"
       RISKY_MERCHANT_AVG_MAX: "420"
-      OVERLOAD_MIN_CANDIDATES: "3000"
-      OVERLOAD_MAX_CANDIDATES: "32400"
-      OVERLOAD_THRESHOLD: "0"
-      OVERLOAD_FAST_ONLY: "true"
-      SEARCH_FALLBACK_LAST_DISTANCE: "2900"
-      FAST_PATH: "false"
+      RISKY_NATIVE_FINE: "1"
+      KDTREE_NATIVE: "1"
+      DOTNET_EnableDiagnostics: "0"
     volumes:
       - backend-sockets:/sockets
     ulimits:
       nofile:
         soft: 65535
         hard: 65535
-      memlock:
-        soft: -1
-        hard: -1
     deploy:
       resources:
         limits:
-          cpus: "${API_CPUS:-0.40}"
-          memory: "162MB"
+          cpus: "0.44"
+          memory: "156MB"
 
 volumes:
   backend-sockets:
@@ -181,5 +163,5 @@ volumes:
 networks:
   default:
     driver_opts:
-      com.docker.network.bridge.enable_ip_masquerade: "true"
+      com.docker.network.bridge.enable_ip_masquerade: "false"
       com.docker.network.bridge.enable_icc: "true"

@@ -8,6 +8,17 @@ Este repositorio e uma implementacao hibrida .NET/C. O runtime submetido mantem
 o processo da API em .NET 10 Native AOT e chama um classificador KD-tree nativo
 em C via P/Invoke para a busca critica de vizinhos mais proximos.
 
+## Stack Atual
+
+- API e CLI em .NET 10 Native AOT escritos em C#
+- runtime nativo em C carregado via P/Invoke
+- load balancer TCP customizado em C
+- servidor HTTP raw dentro do processo da API
+- Unix sockets com fd handoff (`fdpass`) entre `lb` e APIs
+- indice binario de referencias mapeado por mmap e embutido na imagem Docker
+- KD-tree particionada com busca k-NN exata sobre vetores quantizados `int16`
+- rede Docker bridge/default com `lb`, `api1` e `api2`
+
 ## Arquitetura
 
 A imagem competitiva contem tres componentes principais de runtime:
@@ -115,6 +126,13 @@ Rodar o mesmo caminho pelo WSL/Linux:
 
 ```sh
 MODE=build sh scripts/k6-local.sh
+```
+
+Para aproximar o ambiente local do runner remoto, use a distro WSL Ubuntu 24.04
+e o preset Mac Mini:
+
+```powershell
+.\scripts\validate-local.ps1 -WslDistro RinhaUbuntu24 -RunnerPreset remote-mac-mini
 ```
 
 Rodar o gate local completo antes de publicar:

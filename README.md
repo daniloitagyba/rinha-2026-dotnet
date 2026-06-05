@@ -8,6 +8,17 @@ This repository is a hybrid .NET/C implementation. The submitted runtime keeps
 the API process in .NET 10 Native AOT and calls a native C KD-tree classifier
 through P/Invoke for the critical nearest-neighbor search.
 
+## Current Stack
+
+- .NET 10 Native AOT API and CLI written in C#
+- C native runtime loaded through P/Invoke
+- C custom TCP load balancer
+- raw HTTP server in the API process
+- Unix sockets with fd handoff (`fdpass`) between `lb` and APIs
+- mmap-backed binary reference index embedded in the Docker image
+- partitioned KD-tree with exact k-NN search over quantized `int16` vectors
+- Docker bridge/default network with `lb`, `api1`, and `api2`
+
 ## Architecture
 
 The competitive Docker image contains three main runtime components:
@@ -115,6 +126,13 @@ Run the same path from WSL/Linux:
 
 ```sh
 MODE=build sh scripts/k6-local.sh
+```
+
+For a local environment closer to the remote runner, use the Ubuntu 24.04 WSL
+distro and the Mac Mini preset:
+
+```powershell
+.\scripts\validate-local.ps1 -WslDistro RinhaUbuntu24 -RunnerPreset remote-mac-mini
 ```
 
 Run the full local gate before publishing:
